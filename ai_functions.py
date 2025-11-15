@@ -473,6 +473,89 @@ Text: {text}"""
         return [single] if single.get("amount", 0) > 0 else []
 
 
+def deepseek_ai_country(country_text: str, lang: str = "en") -> Optional[str]:
+    """
+    DeepSeek_AI_Country: Detect country name from any language and return timezone.
+    
+    Args:
+        country_text: Country name in any language (e.g., "Uzbekistan", "Узбекистан", "O'zbekiston")
+        lang: User's language preference (uz, ru, en)
+    
+    Returns:
+        Timezone name string (e.g., "Asia/Tashkent") or None
+    """
+    prompts = {
+        "uz": f"""Quyidagi matndan mamlakat nomini aniqlang va uning vaqt mintaqasini (timezone) qaytaring.
+Mamlakat nomi: {country_text}
+
+Siz faqat timezone nomini qaytaring (masalan: "Asia/Tashkent", "Europe/Moscow", "America/New_York").
+Agar mamlakat aniqlanmasa, "None" qaytaring.
+Faqat timezone nomini yoki "None" ni qaytaring, boshqa hech narsa emas.""",
+        "ru": f"""Определите название страны из следующего текста и верните её часовой пояс (timezone).
+Название страны: {country_text}
+
+Верните только название timezone (например: "Asia/Tashkent", "Europe/Moscow", "America/New_York").
+Если страна не определена, верните "None".
+Верните только название timezone или "None", ничего больше.""",
+        "en": f"""Identify the country name from the following text and return its timezone.
+Country name: {country_text}
+
+Return only the timezone name (e.g., "Asia/Tashkent", "Europe/Moscow", "America/New_York").
+If country cannot be identified, return "None".
+Return only the timezone name or "None", nothing else."""
+    }
+    
+    prompt = prompts.get(lang, prompts["en"])
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {Config.DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": "You are DeepSeek_AI_Country - specialized for country detection and timezone identification from any language. Your ONLY job is to identify the country name from user input (which can be in any language: English, Russian, Uzbek, etc.) and return the corresponding IANA timezone name (e.g., 'Asia/Tashkent', 'Europe/Moscow', 'America/New_York'). Return ONLY the timezone name or 'None' if country cannot be identified. Do not include any explanation or additional text."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2
+        }
+        
+        response = requests.post(
+            Config.DEEPSEEK_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            
+            # Clean up response - remove quotes, whitespace, etc.
+            content = content.strip().strip('"').strip("'").strip()
+            
+            if content.lower() == "none" or not content:
+                logger.debug(f"AI could not detect country from: {country_text}")
+                return None
+            
+            # Validate timezone format (basic check)
+            if "/" in content and len(content.split("/")) == 2:
+                logger.info(f"AI detected timezone {content} from country text: {country_text} (language: {lang})")
+                return content
+            else:
+                logger.warning(f"AI returned invalid timezone format: {content} from country text: {country_text}")
+                return None
+        else:
+            logger.error(f"DeepSeek API error in country AI: {response.status_code}")
+            return None
+    
+    except Exception as e:
+        logger.error(f"Error calling DeepSeek API for country detection: {e}", exc_info=True)
+        return None
+
+
 def _extract_expense_manually(text: str, lang: str) -> Dict:
     """Fallback manual extraction if API fails."""
     import re

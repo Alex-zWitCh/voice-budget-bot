@@ -282,6 +282,18 @@ class Database:
         finally:
             session.close()
     
+    def get_all_users_with_timezone(self):
+        """Get all users who have timezone set (not UTC). Thread-safe."""
+        session = self.session
+        try:
+            results = session.query(User).filter(
+                User.timezone.isnot(None),
+                User.timezone != 'UTC'
+            ).all()
+            return results
+        finally:
+            session.close()
+    
     def mark_reminder_sent(self, reminder_id: int):
         """Mark a reminder as sent. Thread-safe."""
         session = self.session

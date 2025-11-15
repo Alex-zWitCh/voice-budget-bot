@@ -411,12 +411,15 @@ def text_message_handler(message: telebot.types.Message):
             return
         
         if message.text not in back_texts:
-            # Try to detect timezone from country name
+            # Try to detect timezone from country name (with language support via AI)
             from handlers.reminder_handler import get_timezone_from_country
-            tz_name = get_timezone_from_country(message.text)
+            tz_name = get_timezone_from_country(message.text, language=language)
             if tz_name:
                 try:
                     db.update_user_timezone(message.from_user.id, tz_name)
+                    logger.info(f"Updated timezone for user {message.from_user.id} to {tz_name} from country input: {message.text}")
+                    # Reschedule daily expense reminder for new timezone
+                    scheduler.reschedule_user_daily_reminder(message.from_user.id, tz_name, language)
                     bot.reply_to(
                         message,
                         get_translation(language, "timezone_updated", timezone=tz_name),
@@ -480,6 +483,8 @@ def location_message_handler(message: telebot.types.Message):
         try:
             db.update_user_timezone(message.from_user.id, tz_name)
             logger.info(f"Updated timezone for user {user.telegram_id} to {tz_name} from location")
+            # Reschedule daily expense reminder for new timezone
+            scheduler.reschedule_user_daily_reminder(message.from_user.id, tz_name, language)
             
             # Check if user was changing timezone from settings
             if message.from_user.id in settings_handler.changing_timezone:

@@ -3,9 +3,11 @@ Scheduler for reminder notifications using APScheduler.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as dt_time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.cron import CronTrigger
+import pytz
 import telebot
 from database import Database
 from translations import get_translation
@@ -23,6 +25,7 @@ class ReminderScheduler:
         self.scheduler = BackgroundScheduler(timezone=timezone.utc)
         self.scheduler.start()
         self._schedule_pending_reminders()
+        self._schedule_daily_expense_reminders()
     
     def _schedule_pending_reminders(self):
         """Schedule all pending reminders."""
@@ -102,6 +105,70 @@ class ReminderScheduler:
             logger.info(f"Sent exact notification for reminder {reminder_id} to user {telegram_id} and marked as sent")
         except Exception as e:
             logger.error(f"Error sending exact notification for reminder {reminder_id}: {e}")
+    
+    def _schedule_daily_expense_reminders(self):
+        """Schedule daily expense reminders at 20:00 for each user in their timezone."""
+        try:
+            # Get all users with timezone set
+            users = self.db.get_all_users_with_timezone()
+            
+            for user in users:
+                try:
+                    # Get user's timezone
+                    user_tz = pytz.timezone(user.timezone)
+                    language = user.language or "en"
+                    
+                    # Create a job that runs daily at 20:00 in user's timezone
+                    # We use cron trigger with timezone support
+                    self.scheduler.add_job(
+                        self._send_daily_expense_reminder,
+                        trigger=CronTrigger(hour=20, minute=0, timezone=user_tz),
+                        args=[user.telegram_id, language],
+                        id=f"daily_expense_reminder_{user.telegram_id}",
+                        replace_existing=True,
+                        name=f"Daily expense reminder for user {user.telegram_id}"
+                    )
+                    logger.info(f"Scheduled daily expense reminder for user {user.telegram_id} at 20:00 {user.timezone}")
+                except Exception as e:
+                    logger.error(f"Error scheduling daily reminder for user {user.telegram_id}: {e}", exc_info=True)
+            
+            logger.info(f"Scheduled daily expense reminders for {len(users)} users")
+        except Exception as e:
+            logger.error(f"Error scheduling daily expense reminders: {e}", exc_info=True)
+    
+    def _send_daily_expense_reminder(self, telegram_id: int, language: str):
+        """Send daily expense reminder to user."""
+        try:
+            message = get_translation(language, "daily_expense_reminder")
+            self.bot.send_message(telegram_id, message)
+            logger.info(f"Sent daily expense reminder to user {telegram_id}")
+        except Exception as e:
+            logger.error(f"Error sending daily expense reminder to user {telegram_id}: {e}", exc_info=True)
+    
+    def reschedule_user_daily_reminder(self, telegram_id: int, user_timezone: str, user_language: str):
+        """Reschedule daily expense reminder for a specific user (e.g., when timezone changes)."""
+        try:
+            user_tz = pytz.timezone(user_timezone)
+            
+            # Remove old job if exists
+            job_id = f"daily_expense_reminder_{telegram_id}"
+            try:
+                self.scheduler.remove_job(job_id)
+            except:
+                pass  # Job might not exist
+            
+            # Schedule new job
+            self.scheduler.add_job(
+                self._send_daily_expense_reminder,
+                trigger=CronTrigger(hour=20, minute=0, timezone=user_tz),
+                args=[telegram_id, user_language],
+                id=job_id,
+                replace_existing=True,
+                name=f"Daily expense reminder for user {telegram_id}"
+            )
+            logger.info(f"Rescheduled daily expense reminder for user {telegram_id} at 20:00 {user_timezone}")
+        except Exception as e:
+            logger.error(f"Error rescheduling daily reminder for user {telegram_id}: {e}", exc_info=True)
     
     def shutdown(self):
         """Shutdown the scheduler."""

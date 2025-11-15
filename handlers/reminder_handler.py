@@ -15,6 +15,7 @@ from ai_functions import deepseek_ai_reminder
 from translations import get_translation
 from keyboards import create_back_keyboard
 from voice_transcriber import VoiceTranscriber
+from timezonefinderL import TimezoneFinder
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,6 @@ def get_timezone_from_location(latitude, longitude):
     """
     # First, try timezonefinderL (local library, no network call, faster)
     try:
-        from timezonefinderL import TimezoneFinder
         tf = TimezoneFinder()
         tz_name = tf.timezone_at(lat=latitude, lng=longitude)
         if tz_name:
@@ -68,36 +68,22 @@ def get_timezone_from_location(latitude, longitude):
         logger.debug("timezonefinderL not available, trying API")
     except Exception as e:
         logger.debug(f"Error using timezonefinderL: {e}, trying API")
-    
-    # Fallback: Use timezone API (slower, requires network)
-    try:
-        import requests
-        # Using timezoneapi.io (free, no API key required)
-        # Increased timeout to 10 seconds
-        url = f"https://timezoneapi.io/api/timezone/?lat={latitude}&lon={longitude}"
-        response = requests.get(url, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('data') and data['data'].get('timezone'):
-                tz_name = data['data']['timezone'].get('id')
-                if tz_name:
-                    logger.info(f"Detected timezone {tz_name} from coordinates ({latitude}, {longitude}) using API")
-                    return tz_name
-    except requests.exceptions.Timeout:
-        logger.warning(f"Timeout detecting timezone from API for coordinates ({latitude}, {longitude})")
-    except Exception as e:
-        logger.warning(f"Error detecting timezone from API: {e}")
+
     
     return None
 
 
-def get_timezone_from_country(country_name: str) -> str:
+def get_timezone_from_country(country_name: str, language: str = "en") -> str:
     """
     Get timezone from country name.
+    Tries direct mapping first, then AI detection as fallback.
     Returns timezone name string or None.
+    
+    Args:
+        country_name: Country name in any language
+        language: User's language preference (uz, ru, en) for AI fallback
     """
-    # Common country to timezone mappings
+    # Common country to timezone mappings (English names first)
     country_timezone_map = {
         # Major countries
         "usa": "America/New_York", "united states": "America/New_York", "us": "America/New_York",
@@ -151,7 +137,7 @@ def get_timezone_from_country(country_name: str) -> str:
         "finland": "Europe/Helsinki", "finnish": "Europe/Helsinki",
         "greece": "Europe/Athens", "greek": "Europe/Athens",
         "portugal": "Europe/Lisbon", "portuguese": "Europe/Lisbon",
-        "new zealand": "Pacific/Auckland", "new zealand": "Pacific/Auckland",
+        "new zealand": "Pacific/Auckland",
     }
     
     # Normalize country name
@@ -169,7 +155,7 @@ def get_timezone_from_country(country_name: str) -> str:
             logger.info(f"Detected timezone {tz_name} from country name (partial match): {country_name}")
             return tz_name
     
-    # Try API lookup as fallback
+    # Try API lookup as fallback (before AI)
     try:
         import requests
         url = f"https://restcountries.com/v3.1/name/{country_name}"
@@ -201,6 +187,17 @@ def get_timezone_from_country(country_name: str) -> str:
                         return tz_name
     except Exception as e:
         logger.debug(f"Error looking up country via API: {e}")
+    
+    # Final fallback: Use AI to detect country from any language
+    try:
+        from ai_functions import deepseek_ai_country
+        logger.info(f"Attempting AI detection for country: {country_name} (language: {language})")
+        tz_name = deepseek_ai_country(country_name, language)
+        if tz_name:
+            logger.info(f"AI detected timezone {tz_name} from country name: {country_name}")
+            return tz_name
+    except Exception as e:
+        logger.error(f"Error using AI for country detection: {e}", exc_info=True)
     
     return None
 

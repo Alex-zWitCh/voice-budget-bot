@@ -47,7 +47,8 @@ TRANSLATIONS = {
         "processing": "Qayta ishlanmoqda...",
         "timezone_updated": "Vaqt mintaqasi yangilandi: {timezone}",
         "timezone_detection_failed": "Vaqt mintaqasini aniqlashda xatolik yuz berdi.",
-        "about_text": "SmartExpenseBot — sizning kundalik xarajatlaringizni boshqarish, hisobotlar olish va eslatmalarni avtomatik tarzda olishda yordam beruvchi aqlli yordamchingizdir.\nBu bot orqali siz o‘z moliyaviy holatingizni nazorat qilib, har bir sarfingizni tahlil qila olasiz.\n\nBiz ushbu loyihani foydalanuvchilarga qulay, tejamkor va aqlli moliyaviy boshqaruv imkoniyatini berish maqsadida yaratdik.\n\nAgar sizga SmartExpenseBot yoqsa va bizni qo‘llab-quvvatlamoqchi bo‘lsangiz, biz uchun bu juda katta ilhom bo‘ladi.\n💬 Fikr-mulohazalaringizni yozib qoldiring va ❤️ istasangiz, kichik donat orqali loyihani rivojlantirishimizga yordam bering.\n\nMuallif: Botir Bakhtiyarov 🇺🇿",
+        "daily_expense_reminder": "💰 Kunlik eslatma: Bugungi xarajatlaringizni kiritishni unutmang! Xarajatlaringizni yozib olish sizga moliyaviy holatingizni nazorat qilishda yordam beradi.",
+        "about_text": "SmartExpenseBot — sizning kundalik xarajatlaringizni boshqarish, hisobotlar olish va eslatmalarni avtomatik tarzda olishda yordam beruvchi aqlli yordamchingizdir.\nBu bot orqali siz o'z moliyaviy holatingizni nazorat qilib, har bir sarfingizni tahlil qila olasiz.\n\nBiz ushbu loyihani foydalanuvchilarga qulay, tejamkor va aqlli moliyaviy boshqaruv imkoniyatini berish maqsadida yaratdik.\n\nAgar sizga SmartExpenseBot yoqsa va bizni qo'llab-quvvatlamoqchi bo'lsangiz, biz uchun bu juda katta ilhom bo'ladi.\n💬 Fikr-mulohazalaringizni yozib qoldiring va ❤️ istasangiz, kichik donat orqali loyihani rivojlantirishimizga yordam bering.\n\nMuallif: Botir Bakhtiyarov 🇺🇿",
     },
     "ru": {
         "welcome": "Здравствуйте! Я SmartExpenseBot - ваш личный помощник. Выберите язык:",
@@ -92,6 +93,7 @@ TRANSLATIONS = {
         "processing": "Обработка...",
         "timezone_updated": "Часовой пояс обновлен: {timezone}",
         "timezone_detection_failed": "Не удалось определить часовой пояс.",
+        "daily_expense_reminder": "💰 Ежедневное напоминание: Не забудьте внести сегодняшние расходы! Запись ваших расходов поможет вам контролировать свое финансовое положение.",
         "about_text": "SmartExpenseBot — ваш интеллектуальный помощник для управления ежедневными расходами, генерации отчетов и получения полезных напоминаний.\nС этим ботом вы можете легко отслеживать свои финансы и анализировать, куда ваши деньги идут.\nМы создали этот проект, чтобы сделать управление финансами простым, умным и доступным для всех.\n\nЕсли вам нравится использовать SmartExpenseBot и вы хотите поддержать нашу работу, ваши отзывы и пожертвования значимы для нас.\n💬 Поделитесь своими мыслями и ❤️ поддержите нас маленьким пожертвованием, чтобы помочь нам развивать и улучшать этот проект.\n\nМужчина: Botir Bakhtiyarov 🇺🇿",
     },
     "en": {
@@ -137,6 +139,7 @@ TRANSLATIONS = {
         "processing": "Processing...",
         "timezone_updated": "Timezone updated: {timezone}",
         "timezone_detection_failed": "Failed to detect timezone.",
+        "daily_expense_reminder": "💰 Daily Reminder: Don't forget to input your expenses today! Recording your expenses helps you control your financial situation.",
         "about_text": "SmartExpenseBot is your intelligent assistant for managing daily expenses, generating reports, and receiving helpful reminders.\nWith this bot, you can easily keep track of your finances and analyze where your money goes.\nWe built this project to make financial management simple, smart, and accessible for everyone.\n\nIf you enjoy using SmartExpenseBot and want to support our work, your feedback and donations mean the world to us.\n💬 Share your thoughts and ❤️ support us with a small donation to help us grow and improve this project.\n\nCreated by: Botir Bakhtiyarov 🇺🇿",
     }
 }
