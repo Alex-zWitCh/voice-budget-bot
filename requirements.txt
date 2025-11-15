@@ -7,6 +7,5 @@ requests==2.32.4
 python-dateutil==2.8.2
 pydub==0.25.1
 pytz==2024.1
-timezonefinderL==0.1.0
+timezonefinderL
 psycopg2-binary==2.9.10
-
