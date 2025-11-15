@@ -32,8 +32,6 @@ wheels/
 *.sqlite3
 smart_expense_bot.db
 
-# Vosk models (large files)
-models/
 
 # Temporary files
 /tmp/
