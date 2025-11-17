@@ -170,6 +170,39 @@ class ReminderScheduler:
         except Exception as e:
             logger.error(f"Error rescheduling daily reminder for user {telegram_id}: {e}", exc_info=True)
     
+    def cancel_user_reminders(self, telegram_id: int):
+        """Cancel all scheduled reminders and daily reminders for a user (e.g., when account is deleted)."""
+        try:
+            # Get all reminders for this user from database
+            from database import User, Reminder
+            user = self.db.session.query(User).filter_by(telegram_id=telegram_id).first()
+            if user:
+                reminders = self.db.session.query(Reminder).filter_by(user_id=user.id).all()
+                for reminder in reminders:
+                    # Remove reminder warning and exact jobs
+                    warning_job_id = f"reminder_warning_{reminder.id}"
+                    exact_job_id = f"reminder_exact_{reminder.id}"
+                    try:
+                        self.scheduler.remove_job(warning_job_id)
+                    except:
+                        pass
+                    try:
+                        self.scheduler.remove_job(exact_job_id)
+                    except:
+                        pass
+            
+            # Remove daily expense reminder job
+            daily_job_id = f"daily_expense_reminder_{telegram_id}"
+            try:
+                self.scheduler.remove_job(daily_job_id)
+                logger.info(f"Removed daily expense reminder for user {telegram_id}")
+            except:
+                pass  # Job might not exist
+            
+            logger.info(f"Cancelled all reminders for user {telegram_id}")
+        except Exception as e:
+            logger.error(f"Error cancelling reminders for user {telegram_id}: {e}", exc_info=True)
+    
     def shutdown(self):
         """Shutdown the scheduler."""
         self.scheduler.shutdown()

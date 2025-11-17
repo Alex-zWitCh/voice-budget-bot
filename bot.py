@@ -13,6 +13,7 @@ from config import Config
 from database import Database
 from scheduler import ReminderScheduler
 from handlers.expense_handler import ExpenseHandler
+from handlers.income_handler import IncomeHandler
 from handlers.report_handler import ReportHandler
 from handlers.reminder_handler import ReminderHandler
 from handlers.settings_handler import SettingsHandler
@@ -54,6 +55,7 @@ scheduler = ReminderScheduler(bot, db)
 
 # Initialize handlers
 expense_handler = ExpenseHandler(bot, db)
+income_handler = IncomeHandler(bot, db)
 report_handler = ReportHandler(bot, db)
 reminder_handler = ReminderHandler(bot, db)
 settings_handler = SettingsHandler(bot, db)
@@ -153,6 +155,17 @@ def expenses_button(message: telebot.types.Message):
 
 
 @bot.message_handler(func=lambda message: message.text and (
+    get_translation("en", "income") in message.text or
+    get_translation("ru", "income") in message.text or
+    get_translation("uz", "income") in message.text
+))
+def income_button(message: telebot.types.Message):
+    """Handle income button."""
+    income_handler.handle_income_command(message)
+    user_states[message.from_user.id] = "income"
+
+
+@bot.message_handler(func=lambda message: message.text and (
     get_translation("en", "reports") in message.text or
     get_translation("ru", "reports") in message.text or
     get_translation("uz", "reports") in message.text
@@ -183,6 +196,7 @@ def settings_button(message: telebot.types.Message):
     """Handle settings button."""
     # Exit any active modes
     expense_handler.active_expense_mode.discard(message.from_user.id)
+    income_handler.active_income_mode.discard(message.from_user.id)
     report_handler.active_report_mode.discard(message.from_user.id)
     reminder_handler.active_reminder_mode.discard(message.from_user.id)
     user_states[message.from_user.id] = "none"
@@ -198,6 +212,7 @@ def about_button(message: telebot.types.Message):
     """Handle about button."""
     # Exit any active modes
     expense_handler.active_expense_mode.discard(message.from_user.id)
+    income_handler.active_income_mode.discard(message.from_user.id)
     report_handler.active_report_mode.discard(message.from_user.id)
     reminder_handler.active_reminder_mode.discard(message.from_user.id)
     user_states[message.from_user.id] = "none"
@@ -205,16 +220,23 @@ def about_button(message: telebot.types.Message):
 
 
 # Expense confirmation callbacks
-@bot.callback_query_handler(func=lambda call: call.data == "confirm_yes")
+@bot.callback_query_handler(func=lambda call: call.data == "confirm_yes" and call.from_user.id in expense_handler.pending_expenses)
 def confirm_expense(call: telebot.types.CallbackQuery):
     """Handle expense confirmation (yes)."""
     expense_handler.handle_expense_confirmation(call, confirmed=True)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "confirm_no")
+@bot.callback_query_handler(func=lambda call: call.data == "confirm_no" and call.from_user.id in expense_handler.pending_expenses)
 def reject_expense(call: telebot.types.CallbackQuery):
     """Handle expense rejection (no)."""
     expense_handler.handle_expense_confirmation(call, confirmed=False)
+
+
+# Income confirmation callbacks
+@bot.callback_query_handler(func=lambda call: call.data in ["confirm_yes", "confirm_no"] and call.from_user.id in income_handler.pending_incomes)
+def income_confirm_callback(call: telebot.types.CallbackQuery):
+    """Handle income confirmation callback."""
+    income_handler.handle_income_confirm(call)
 
 
 # Settings callbacks
@@ -236,11 +258,111 @@ def settings_timezone_callback(call: telebot.types.CallbackQuery):
     settings_handler.handle_timezone_change(call)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "settings_currency")
+def settings_currency_callback(call: telebot.types.CallbackQuery):
+    """Handle currency change from settings."""
+    settings_handler.handle_currency_change(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "settings_delete_account")
+def settings_delete_account_callback(call: telebot.types.CallbackQuery):
+    """Handle delete account from settings."""
+    settings_handler.handle_delete_account(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data in ["confirm_yes", "confirm_no"] and call.from_user.id in settings_handler.deleting_account)
+def delete_account_confirm_callback(call: telebot.types.CallbackQuery):
+    """Handle account deletion confirmation."""
+    settings_handler.handle_delete_account_confirm(call, scheduler=scheduler)
+
+
 # About callbacks
 @bot.callback_query_handler(func=lambda call: call.data == "about_donate")
 def about_donate_callback(call: telebot.types.CallbackQuery):
     """Handle donate from about page."""
     about_handler.handle_donate_callback(call)
+
+
+# Donation callbacks
+@bot.callback_query_handler(func=lambda call: call.data.startswith("donate_"))
+def donate_callback(call: telebot.types.CallbackQuery):
+    """Handle donation amount selection."""
+    if call.data == "donate_back":
+        bot.answer_callback_query(call.id)
+        user = db.get_or_create_user(call.from_user.id, call.from_user.first_name or "User")
+        language = user.language or "en"
+        bot.send_message(
+            call.message.chat.id,
+            get_translation(language, "main_menu"),
+            reply_markup=create_main_keyboard(language)
+        )
+        return
+    
+    if call.data == "donate_custom":
+        bot.answer_callback_query(call.id)
+        user = db.get_or_create_user(call.from_user.id, call.from_user.first_name or "User")
+        language = user.language or "en"
+        bot.send_message(
+            call.message.chat.id,
+            get_translation(language, "donate_custom")
+        )
+        about_handler.waiting_for_custom_donation.add(call.from_user.id)
+        return
+    
+    try:
+        amount = int(call.data.split("_")[1])
+        about_handler.send_donation_invoice(call.message.chat.id, amount)
+        bot.answer_callback_query(call.id)
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid amount")
+
+
+# Custom donation command
+@bot.message_handler(commands=['custom', 'donate'])
+def custom_donate_command(message: telebot.types.Message):
+    """Handle custom donation command."""
+    user = db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
+    language = user.language or "en"
+    
+    if message.text.startswith('/custom'):
+        bot.reply_to(message, get_translation(language, "donate_custom"))
+        about_handler.waiting_for_custom_donation.add(message.from_user.id)
+    else:
+        about_handler.handle_donate_callback(types.CallbackQuery(
+            id=0,
+            from_user=message.from_user,
+            message=message,
+            data="donate",
+            chat_instance=0
+        ))
+
+
+# Pre-checkout query handler (always approve for donations)
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def process_pre_checkout(pre_checkout_query):
+    """Always approve pre-checkout queries for donations."""
+    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+
+# Successful payment handler
+@bot.message_handler(content_types=['successful_payment'])
+def process_successful_payment(message: telebot.types.Message):
+    """Handle successful payment."""
+    # Get user to retrieve their language preference
+    try:
+        user = db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
+        language = user.language or "en"
+    except:
+        # Fallback to English if user lookup fails
+        language = "en"
+    
+    payload = message.successful_payment.invoice_payload
+    stars = message.successful_payment.total_amount
+    
+    thanks_message = get_translation(language, "donate_thanks", amount=stars)
+    bot.send_message(message.chat.id, thanks_message)
+    
+    logger.info(f"Received donation: {stars} ⭐ from user {message.from_user.id} (language: {language})")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "about_feedback")
@@ -260,19 +382,41 @@ def currency_callback(call: telebot.types.CallbackQuery):
     language = user.language or "en"
     
     bot.answer_callback_query(call.id)
-    bot.edit_message_text(
-        get_translation(language, "currency_set", currency=currency_code),
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id
+    
+    # Always show currency set message
+    if call.message:
+        bot.edit_message_text(
+            get_translation(language, "currency_set", currency=currency_code),
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id
+        )
+    
+    # Determine if this is from settings or initial setup
+    # If currency was selected from settings, user clicked "settings_currency" before this
+    # We can detect this by checking if user is NOT in any active mode
+    is_from_settings = (
+        call.from_user.id not in expense_handler.active_expense_mode and 
+        call.from_user.id not in income_handler.active_income_mode and
+        call.from_user.id not in reminder_handler.active_reminder_mode
     )
     
-    # Enter expense mode after currency selection
-    expense_handler.active_expense_mode.add(call.from_user.id)
-    bot.send_message(
-        call.message.chat.id,
-        get_translation(language, "expense_prompt"),
-        reply_markup=create_back_keyboard(language)
-    )
+    if is_from_settings:
+        # From settings - just confirm and show main menu
+        bot.send_message(
+            call.message.chat.id if call.message else call.from_user.id,
+            get_translation(language, "main_menu"),
+            reply_markup=create_main_keyboard(language)
+        )
+    else:
+        # From initial setup - enter expense mode
+        expense_handler.active_expense_mode.add(call.from_user.id)
+        user_states[call.from_user.id] = "expense"
+        chat_id = call.message.chat.id if call.message else call.from_user.id
+        bot.send_message(
+            chat_id,
+            get_translation(language, "expense_prompt"),
+            reply_markup=create_back_keyboard(language)
+        )
 
 
 # Report period selection callbacks
@@ -287,7 +431,8 @@ def report_period_callback(call: telebot.types.CallbackQuery):
     bot.answer_callback_query(call.id)
     
     period = call.data.split("_")[1]  # today, week, month, custom
-    now = datetime.utcnow()
+    from datetime import timezone as dt_timezone
+    now = datetime.now(dt_timezone.utc).replace(tzinfo=None)  # Convert to naive UTC for comparison
     start_date = None
     end_date = now
     
@@ -343,7 +488,16 @@ def report_period_callback(call: telebot.types.CallbackQuery):
 # Text message handlers
 @bot.message_handler(content_types=['text'])
 def text_message_handler(message: telebot.types.Message):
-    """Handle text messages."""
+    """Handle all text messages."""
+    # Allow /start command to work (can recreate account)
+    if message.text and message.text.startswith('/start'):
+        start_command(message)
+        return
+    
+    # Check if user exists (if not, they were deleted - ignore message silently)
+    if not db.user_exists(message.from_user.id):
+        return  # User was deleted - stop responding
+    
     user = db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
     language = user.language or "en"
     
@@ -356,6 +510,7 @@ def text_message_handler(message: telebot.types.Message):
     if message.text in back_texts:
         # Exit all modes
         expense_handler.active_expense_mode.discard(message.from_user.id)
+        income_handler.active_income_mode.discard(message.from_user.id)
         report_handler.active_report_mode.discard(message.from_user.id)
         reminder_handler.active_reminder_mode.discard(message.from_user.id)
         user_states[message.from_user.id] = "none"
@@ -435,8 +590,14 @@ def text_message_handler(message: telebot.types.Message):
                 )
                 return
     
-    # Check if user has pending expense (waiting for confirmation)
+    # Check if user has pending expense or income (waiting for confirmation)
     if message.from_user.id in expense_handler.pending_expenses:
+        return
+    if message.from_user.id in income_handler.pending_incomes:
+        return
+    
+    # Check if waiting for custom donation amount
+    if about_handler.handle_custom_donation_input(message):
         return
     
     # Check user state and route accordingly
@@ -444,6 +605,8 @@ def text_message_handler(message: telebot.types.Message):
     
     if state == "expense" or expense_handler.is_in_expense_mode(message.from_user.id):
         expense_handler.handle_expense_message(message)
+    elif state == "income" or income_handler.is_in_income_mode(message.from_user.id):
+        income_handler.handle_income_message(message)
     elif state == "reminder" or reminder_handler.is_in_reminder_mode(message.from_user.id):
         reminder_handler.handle_reminder_message(message)
     # Report mode removed - now uses buttons only
@@ -461,6 +624,8 @@ def voice_message_handler(message: telebot.types.Message):
     
     if state == "expense" or expense_handler.is_in_expense_mode(message.from_user.id):
         expense_handler.handle_expense_voice(message)
+    elif state == "income" or income_handler.is_in_income_mode(message.from_user.id):
+        income_handler.handle_income_voice(message)
     elif state == "reminder" or reminder_handler.is_in_reminder_mode(message.from_user.id):
         reminder_handler.handle_reminder_voice(message)
     else:

@@ -148,71 +148,102 @@ Expense: {text}"""
         return _extract_expense_manually(text, lang)
 
 
-def deepseek_ai_report(text: str, lang: str = "en", expenses_data: list = None) -> str:
+def deepseek_ai_report(text: str, lang: str = "en", expenses_data: list = None, user_currency: str = "USD") -> str:
     """
-    DeepSeek_AI_data: Generate expense reports based on user queries.
+    DeepSeek_AI_data: Generate financial reports based on user queries.
     
     Args:
         text: User's report query
         lang: User's language preference
-        expenses_data: List of expense objects from database
+        expenses_data: List of expense and/or income objects from database
+        user_currency: User's currency from User table (for display)
     
     Returns:
         Formatted report string
     """
-    # Prepare context with expenses
+    # Prepare context with expenses and incomes
+    from database import Expense, Income
+    
     expenses_context = ""
     if expenses_data:
-        total = sum(e.amount for e in expenses_data)
-        categories = {}
-        for e in expenses_data:
-            cat = e.category or "Other"
-            categories[cat] = categories.get(cat, 0) + e.amount
+        # Separate expenses and incomes
+        expenses = [e for e in expenses_data if isinstance(e, Expense)]
+        incomes = [i for i in expenses_data if isinstance(i, Income)]
         
-        expenses_context = f"\n\nUser's expenses (total {len(expenses_data)} records):\n"
-        expenses_context += f"Total amount: {total:.2f}\n"
-        expenses_context += "By category:\n"
-        for cat, amount in categories.items():
-            expenses_context += f"- {cat}: {amount:.2f}\n"
-        expenses_context += "\nRecent expense details:\n"
-        for e in expenses_data[:15]:
-            date_str = e.date.strftime("%Y-%m-%d") if e.date else 'N/A'
-            expenses_context += f"- {date_str}: {e.amount:.2f} ({e.category}): {e.description or ''}\n"
+        expenses_context = "\n\nUser's financial data:\n"
+        
+        # Process expenses - use user's currency from User table
+        if expenses:
+            total_expenses = sum(e.amount for e in expenses)
+            categories = {}
+            for e in expenses:
+                cat = getattr(e, 'category', 'Other') or "Other"
+                categories[cat] = categories.get(cat, 0) + e.amount
+            
+            expenses_context += f"\nExpenses (total {len(expenses)} records):\n"
+            expenses_context += f"Total: {total_expenses:.2f} {user_currency}\n"
+            expenses_context += "By category:\n"
+            for cat, amount in categories.items():
+                expenses_context += f"- {cat}: {amount:.2f} {user_currency}\n"
+            expenses_context += "\nRecent expenses:\n"
+            for e in expenses[:10]:
+                date_str = e.date.strftime("%Y-%m-%d") if hasattr(e, 'date') and e.date else 'N/A'
+                category = getattr(e, 'category', 'Other') or 'Other'
+                description = getattr(e, 'description', '') or ''
+                expenses_context += f"- {date_str}: {e.amount:.2f} {user_currency} ({category}): {description}\n"
+        
+        # Process incomes - use user's currency from User table
+        if incomes and len(incomes) > 0:
+            total_incomes = sum(i.amount for i in incomes)
+            expenses_context += f"\nIncomes (total {len(incomes)} records):\n"
+            expenses_context += f"Total: {total_incomes:.2f} {user_currency}\n"
+            expenses_context += "Recent incomes:\n"
+            for i in incomes[:10]:
+                date_str = i.date.strftime("%Y-%m-%d") if hasattr(i, 'date') and i.date else 'N/A'
+                income_type = getattr(i, 'income_type', 'monthly') or 'monthly'
+                description = getattr(i, 'description', '') or ''
+                expenses_context += f"- {date_str}: {i.amount:.2f} {user_currency} ({income_type}): {description}\n"
+        
+        if not expenses and not incomes:
+            expenses_context += "\nUser has no financial data recorded yet."
     else:
-        expenses_context = "\n\nUser has no expenses recorded yet."
+        expenses_context = "\n\nUser has no financial data recorded yet."
     
     prompts = {
         "uz": f"""Siz foydalanuvchining shaxsiy yordamchisisiz va uning ma'lumotlar bazasiga ulangansiz.
-Sizning vazifangiz: foydalanuvchi bilan uning xarajatlari haqida suhbatlashish, hisobotlar berish, savollarga javob berish.
+Sizning vazifangiz: foydalanuvchi bilan uning xarajatlari va daromadlari haqida suhbatlashish, hisobotlar berish, savollarga javob berish.
 
 MUHIM: 
-- Siz xarajatlar qo'sha OLMAYSIZ - faqat o'qish va hisobot berish mumkin
-- Agar foydalanuvchi xarajat qo'shmoqchi bo'lsa, "Xarajatlar" tugmasini bosishi kerak
+- Siz xarajatlar yoki daromadlar qo'sha OLMAYSIZ - faqat o'qish va hisobot berish mumkin
+- Agar foydalanuvchi xarajat yoki daromad qo'shmoqchi bo'lsa, tegishli tugmalarni bosishi kerak
 - Siz faqat mavjud ma'lumotlar haqida gapirasiz va hisobot berasiz
+- Hisobotda daromad va xarajatlarni taqqoslab, balansni ko'rsating
 
 Foydalanuvchi so'rovi: {text}
 {expenses_context}
 
 Javob bering va kerak bo'lsa, ma'lumotlar bazasidagi ma'lumotlardan foydalaning.""",
         "ru": f"""Вы личный помощник пользователя, подключенный к его базе данных.
-Ваша задача: общаться с пользователем о его расходах, предоставлять отчеты, отвечать на вопросы.
+Ваша задача: общаться с пользователем о его расходах и доходах, предоставлять отчеты, отвечать на вопросы.
 
 ВАЖНО:
-- Вы НЕ МОЖЕТЕ добавлять расходы - только читать и предоставлять отчеты
-- Если пользователь хочет добавить расход, он должен нажать кнопку "Расходы"
+- Вы НЕ МОЖЕТЕ добавлять расходы или доходы - только читать и предоставлять отчеты
+- Если пользователь хочет добавить расход или доход, он должен нажать соответствующие кнопки
 - Вы только обсуждаете существующие данные и предоставляете отчеты
+- В отчете сравнивайте доходы и расходы, показывайте баланс
 
 Запрос пользователя: {text}
 {expenses_context}
 
 Ответьте и при необходимости используйте данные из базы данных.""",
         "en": f"""You are the user's personal assistant, connected to their database.
-Your task: chat with the user about their expenses, provide reports, answer questions.
+Your task: chat with the user about their expenses and income, provide reports, answer questions.
 
 IMPORTANT:
-- You CANNOT add expenses - you can only read and provide reports
-- If the user wants to add an expense, they must press the "Expenses" button
+- You CANNOT add expenses or income - you can only read and provide reports
+- If the user wants to add an expense or income, they must press the appropriate buttons
 - You only discuss existing data and provide reports
+- In reports, compare income and expenses, show balance
 
 User's query: {text}
 {expenses_context}
@@ -228,10 +259,18 @@ Respond and use database information if relevant."""
             "Content-Type": "application/json"
         }
         
+        # Determine language name for system message
+        lang_names = {
+            "uz": "Uzbek (O'zbek tili)",
+            "ru": "Russian (Русский)",
+            "en": "English"
+        }
+        lang_name = lang_names.get(lang, "English")
+        
         payload = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "You are DeepSeek_AI_data - a personal assistant connected to the user's database. You can ONLY read and discuss existing records (expenses). You CANNOT add, modify, or delete any records. If the user wants to add records, direct them to use the appropriate function buttons. Your role is to provide reports, answer questions, and give advice based on existing data."},
+                {"role": "system", "content": f"You are DeepSeek_AI_data - a personal assistant connected to the user's database. CRITICAL: You MUST respond ONLY in {lang_name} language. The user's language is {lang_name}. You can ONLY read and discuss existing records (expenses and income). You CANNOT add, modify, or delete any records. If the user wants to add records, direct them to use the appropriate function buttons. Your role is to provide reports, answer questions, compare income vs expenses, and give advice based on existing data. IMPORTANT: Do NOT use markdown formatting (no ##, **, __, `, etc.) - use plain text only. Use simple text formatting like dashes (-) for lists."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -554,6 +593,174 @@ Return only the timezone name or "None", nothing else."""
     except Exception as e:
         logger.error(f"Error calling DeepSeek API for country detection: {e}", exc_info=True)
         return None
+
+
+def deepseek_ai_income(text: str, lang: str = "en", default_currency: str = "USD") -> Dict:
+    """
+    DeepSeek_AI_Income: Extract income information from natural language.
+    
+    Args:
+        text: User's income description (text or transcribed voice)
+        lang: User's language preference (uz, ru, en)
+        default_currency: Default currency if not specified
+    
+    Returns:
+        Dictionary with amount, currency, description, and income_type (monthly/daily)
+    """
+    prompts = {
+        "uz": f"""Quyidagi matndan daromad ma'lumotlarini ajratib oling va JSON formatida javob bering:
+{{
+    "amount": <raqam>,
+    "currency": "<valyuta>",
+    "description": "<tavsif>",
+    "income_type": "<monthly yoki daily>"
+}}
+
+MUHIM: 
+- Valyutani matndan aniqlang (masalan: USD, EUR, CNY, RMB, Yuan, Dollar, Euro, so'm, rubl)
+- income_type: Agar "oylik", "monthly", "har oy" deb aytilgan bo'lsa "monthly", "kunlik", "daily", "har kuni" bo'lsa "daily"
+- Agar valyuta ko'rsatilmagan bo'lsa, "{default_currency}" dan foydalaning
+
+Matn: {text}""",
+        "ru": f"""Извлеките информацию о доходе из следующего текста и верните JSON ответ:
+{{
+    "amount": <число>,
+    "currency": "<валюта>",
+    "description": "<описание>",
+    "income_type": "<monthly или daily>"
+}}
+
+ВАЖНО:
+- Определите валюту из текста (например: USD, EUR, CNY, RMB, Yuan, Dollar, Euro, доллар, юань, рубль)
+- income_type: Если сказано "месячный", "monthly", "каждый месяц" - "monthly", если "дневной", "daily", "каждый день" - "daily"
+- Если валюта не указана, используйте "{default_currency}"
+
+Текст: {text}""",
+        "en": f"""Extract income information from the following text and return a JSON response:
+{{
+    "amount": <number>,
+    "currency": "<currency>",
+    "description": "<description>",
+    "income_type": "<monthly or daily>"
+}}
+
+IMPORTANT:
+- Detect the currency from the text (e.g., USD, EUR, CNY, RMB, Yuan, Dollar, Euro, dollars, yuan, etc.)
+- income_type: If mentioned as "monthly", "per month", "each month" - use "monthly", if "daily", "per day", "each day" - use "daily"
+- If no currency is mentioned, use "{default_currency}"
+
+Text: {text}"""
+    }
+    
+    prompt = prompts.get(lang, prompts["en"])
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {Config.DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": f"You are DeepSeek_AI_Income - specialized for income extraction. Extract income information from user messages. Detect amount, currency (from text or use {default_currency}), description, and income_type (monthly or daily based on context). Return ONLY valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3
+        }
+        
+        response = requests.post(
+            Config.DEEPSEEK_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            
+            try:
+                # Remove markdown code blocks if present
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                result = json.loads(content)
+                
+                # Validate and normalize
+                amount_value = result.get("amount", 0)
+                try:
+                    amount = float(amount_value)
+                except (ValueError, TypeError):
+                    amount = 0.0
+                
+                currency_raw = result.get("currency", default_currency).upper().strip()
+                currency_map = {
+                    "YUAN": "CNY", "RMB": "CNY", "CN¥": "CNY", "¥": "CNY",
+                    "DOLLAR": "USD", "DOLLARS": "USD", "$": "USD", "US$": "USD",
+                    "EURO": "EUR", "EUROS": "EUR", "€": "EUR",
+                    "RUBLE": "RUB", "RUBLES": "RUB", "RUBL": "RUB", "₽": "RUB",
+                    "SOM": "UZS", "SO'M": "UZS", "UZS": "UZS"
+                }
+                currency = currency_map.get(currency_raw, currency_raw if len(currency_raw) <= 5 else default_currency)
+                
+                income_type_raw = result.get("income_type", "monthly").lower().strip()
+                income_type = "monthly" if "month" in income_type_raw or income_type_raw == "monthly" else "daily"
+                
+                return {
+                    "amount": amount,
+                    "currency": currency,
+                    "description": result.get("description", ""),
+                    "income_type": income_type
+                }
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error in income AI: {e}")
+                return _extract_income_manually(text, lang, default_currency)
+        else:
+            logger.error(f"DeepSeek API error in income AI: {response.status_code}")
+            return _extract_income_manually(text, lang, default_currency)
+    
+    except Exception as e:
+        logger.error(f"Error calling DeepSeek API for income: {e}")
+        return _extract_income_manually(text, lang, default_currency)
+
+
+def _extract_income_manually(text: str, lang: str, default_currency: str) -> Dict:
+    """Fallback manual extraction if API fails."""
+    import re
+    
+    # Try to extract numbers
+    numbers = re.findall(r'\d+\.?\d*', text)
+    amount = float(numbers[0]) if numbers else 0.0
+    
+    text_lower = text.lower()
+    
+    # Detect income type
+    income_type = "monthly"
+    if any(word in text_lower for word in ["daily", "per day", "each day", "kunlik", "har kuni", "дневной", "каждый день"]):
+        income_type = "daily"
+    
+    # Try to detect currency
+    currency = default_currency
+    if any(word in text_lower for word in ["yuan", "rmb", "cny", "¥"]):
+        currency = "CNY"
+    elif any(word in text_lower for word in ["dollar", "usd", "$"]):
+        currency = "USD"
+    elif any(word in text_lower for word in ["euro", "eur", "€"]):
+        currency = "EUR"
+    elif any(word in text_lower for word in ["ruble", "rub", "₽", "rubl"]):
+        currency = "RUB"
+    elif any(word in text_lower for word in ["som", "so'm", "uzs"]):
+        currency = "UZS"
+    
+    return {
+        "amount": amount,
+        "currency": currency,
+        "description": text,
+        "income_type": income_type
+    }
 
 
 def _extract_expense_manually(text: str, lang: str) -> Dict:
