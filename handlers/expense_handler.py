@@ -32,17 +32,20 @@ class ExpenseHandler:
         user = self.db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
         language = user.language or "en"
         
-        # Check if user has currency set (first time expense user)
-        # Check if user has any expenses - if not, ask for currency
-        user_expenses = self.db.get_expenses(message.from_user.id, limit=1)
-        if len(user_expenses) == 0:
-            # First time using expense function - ask for currency selection
-            self.bot.reply_to(
-                message,
-                get_translation(language, "select_currency"),
-                reply_markup=create_currency_keyboard(language)
-            )
-            return
+        # Check if user has currency set (first time using expense/income)
+        # If user's currency is default USD and they have no expenses/incomes, ask for currency
+        if not user.currency or user.currency == "USD":
+            # Check if user has any expenses or incomes - if not, ask for currency
+            user_expenses = self.db.get_expenses(message.from_user.id, limit=1)
+            user_incomes = self.db.get_incomes(message.from_user.id, limit=1)
+            if len(user_expenses) == 0 and len(user_incomes) == 0:
+                # First time using expense function - ask for currency selection
+                self.bot.reply_to(
+                    message,
+                    get_translation(language, "select_currency"),
+                    reply_markup=create_currency_keyboard(language)
+                )
+                return
         
         # Enter expense mode
         self.active_expense_mode.add(message.from_user.id)

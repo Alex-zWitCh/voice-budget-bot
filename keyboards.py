@@ -13,13 +13,14 @@ def create_main_keyboard(language: str) -> types.ReplyKeyboardMarkup:
     
     keyboard.add(
         types.KeyboardButton(get_translation(language, "expenses")),
-        types.KeyboardButton(get_translation(language, "reports"))
+        types.KeyboardButton(get_translation(language, "income"))
     )
     keyboard.add(
-        types.KeyboardButton(get_translation(language, "reminders")),
-        types.KeyboardButton(get_translation(language, "settings"))
+        types.KeyboardButton(get_translation(language, "reports")),
+        types.KeyboardButton(get_translation(language, "reminders"))
     )
     keyboard.add(
+        types.KeyboardButton(get_translation(language, "settings")),
         types.KeyboardButton(get_translation(language, "about"))
     )
     
@@ -56,13 +57,31 @@ def create_back_keyboard(language: str) -> types.ReplyKeyboardMarkup:
     return keyboard
 
 
-def create_donate_keyboard() -> types.InlineKeyboardMarkup:
-    """Create donation keyboard."""
+def create_donate_keyboard(language: str) -> types.InlineKeyboardMarkup:
+    """Create donation keyboard with all donation options."""
     keyboard = types.InlineKeyboardMarkup(row_width=1)
+    
+    # Telegram Stars - preset amounts
     keyboard.add(
-        types.InlineKeyboardButton("💎 Patreon", url="https://patreon.com/botirbakhtiyarov"),
-        types.InlineKeyboardButton("🇺🇿 Trikchilik.uz", url="https://trikchilik.uz"),
-        types.InlineKeyboardButton("⭐ Telegram Stars", callback_data="stars_donate")
+        types.InlineKeyboardButton("⭐ Telegram Stars (10)", callback_data="donate_10"),
+        types.InlineKeyboardButton("⭐ Telegram Stars (50)", callback_data="donate_50"),
+        types.InlineKeyboardButton("⭐ Telegram Stars (100)", callback_data="donate_100"),
+    )
+    
+    # Custom amount for Telegram Stars
+    keyboard.add(
+        types.InlineKeyboardButton(get_translation(language, "donate_custom_stars"), callback_data="donate_custom")
+    )
+    
+    # Other donation platforms (URL buttons)
+    keyboard.add(
+        types.InlineKeyboardButton("🇺🇿 Tirikchilik.uz", url="https://tirikchilik.uz/botir"),
+        types.InlineKeyboardButton("💎 Patreon", url="https://www.patreon.com/15097645/join"),
+        types.InlineKeyboardButton("🐙 GitHub Sponsors", url="https://github.com/sponsors/botirbakhtiyarov")
+    )
+    
+    keyboard.add(
+        types.InlineKeyboardButton(get_translation(language, "back"), callback_data="donate_back")
     )
     return keyboard
 

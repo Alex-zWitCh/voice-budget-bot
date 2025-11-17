@@ -28,6 +28,7 @@ class User(Base):
     
     expenses = relationship("Expense", back_populates="user", cascade="all, delete-orphan")
     reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
+    incomes = relationship("Income", back_populates="user", cascade="all, delete-orphan")
 
 
 class Expense(Base):
@@ -56,6 +57,22 @@ class Reminder(Base):
     sent = Column(Integer, default=0)  # 0 = not sent, 1 = sent
     
     user = relationship("User", back_populates="reminders")
+
+
+class Income(Base):
+    """Income model."""
+    __tablename__ = 'incomes'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    amount = Column(Float, nullable=False)
+    currency = Column(String(10), nullable=False)
+    description = Column(Text)
+    income_type = Column(String(20), default='monthly')  # 'monthly' or 'daily'
+    date = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    user = relationship("User", back_populates="incomes")
 
 
 class Database:
@@ -302,6 +319,108 @@ class Database:
             if reminder:
                 reminder.sent = 1
                 session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    
+    def add_income(self, telegram_id: int, amount: float, currency: str = None, description: str = None, income_type: str = 'monthly'):
+        """Add an income record for a user. Uses user's currency from User table. Thread-safe."""
+        session = self.session
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if not user:
+                user = User(telegram_id=telegram_id, name="")
+                session.add(user)
+                session.flush()
+            
+            # Always use user's currency from User table, not the passed currency parameter
+            user_currency = user.currency or "USD"
+            
+            income = Income(
+                user_id=user.id,
+                amount=amount,
+                currency=user_currency,  # Use user's currency from User table
+                description=description or "",
+                income_type=income_type,
+                date=datetime.utcnow()
+            )
+            session.add(income)
+            session.commit()
+            session.refresh(income)
+            return income
+        except IntegrityError:
+            session.rollback()
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if not user:
+                user = User(telegram_id=telegram_id, name="")
+                session.add(user)
+                session.flush()
+            
+            # Always use user's currency from User table
+            user_currency = user.currency or "USD"
+            
+            income = Income(
+                user_id=user.id,
+                amount=amount,
+                currency=user_currency,  # Use user's currency from User table
+                description=description or "",
+                income_type=income_type,
+                date=datetime.utcnow()
+            )
+            session.add(income)
+            session.commit()
+            session.refresh(income)
+            return income
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    
+    def get_incomes(self, telegram_id: int, start_date=None, end_date=None, limit=100):
+        """Get incomes for a user with optional filters. Thread-safe."""
+        session = self.session
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if not user:
+                return []
+            
+            query = session.query(Income).filter_by(user_id=user.id)
+            
+            if start_date:
+                query = query.filter(Income.date >= start_date)
+            if end_date:
+                query = query.filter(Income.date <= end_date)
+            
+            results = query.order_by(Income.date.desc()).limit(limit).all()
+            return results
+        finally:
+            session.close()
+    
+    def user_exists(self, telegram_id: int) -> bool:
+        """Check if user exists in database. Thread-safe."""
+        session = self.session
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            return user is not None
+        except Exception:
+            return False
+        finally:
+            session.close()
+    
+    def delete_user(self, telegram_id: int):
+        """Delete user and all associated data. Thread-safe."""
+        session = self.session
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if user:
+                # Cascade delete will handle expenses, reminders, and incomes
+                session.delete(user)
+                session.commit()
+                return True
+            return False
         except Exception:
             session.rollback()
             raise

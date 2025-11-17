@@ -9,7 +9,7 @@
 [![Telegram](https://img.shields.io/badge/Telegram-Bot-blue.svg)](https://telegram.org/)
 [![Code Style](https://img.shields.io/badge/code%20style-PEP%208-orange.svg)](https://www.python.org/dev/peps/pep-0008/)
 
-**Track expenses, generate reports, set reminders - all through natural language conversations in your preferred language**
+**Track expenses and income, generate reports, set reminders - all through natural language conversations in your preferred language**
 
 </div>
 
@@ -42,12 +42,15 @@ The bot understands that managing finances shouldn't be complicated. Whether you
 
 ### Key Highlights
 
-- **🤖 AI-Powered Intelligence**: Three specialized AI instances handle different aspects of financial management
+- **🤖 AI-Powered Intelligence**: Four specialized AI instances handle different aspects of financial management
 - **🌍 Universal Language Support**: Full support for English, Russian, and Uzbek with intelligent country detection
-- **🎤 Voice-First Design**: Record expenses via voice messages with automatic transcription
+- **🎤 Voice-First Design**: Record expenses and income via voice messages with automatic transcription
 - **⏰ Smart Automation**: Automated daily reminders at personalized times
-- **📊 Intelligent Reporting**: Natural language queries for instant financial insights
+- **📊 Intelligent Reporting**: Natural language queries for instant financial insights with income/expense balance
+- **💰 Income Tracking**: Track monthly and daily income alongside expenses
+- **💳 Unified Currency System**: Single currency preference for all financial operations
 - **🔒 Privacy-Focused**: Local database storage with optional PostgreSQL support
+- **❤️ Support the Project**: Multiple donation options including Telegram Stars
 
 ## ✨ Key Features
 
@@ -64,22 +67,39 @@ The bot understands that managing finances shouldn't be complicated. Whether you
 - Currency detection and normalization
 - Intelligent fallback for edge cases
 
-**Multiple Currency Support**
+**Unified Currency System**
+- Single currency preference per user (stored in User table)
 - Automatic currency detection (USD, EUR, CNY, RUB, UZS, etc.)
-- User-defined default currency preference
-- Cross-currency expense tracking
+- Currency selection on first expense/income entry
+- All expenses and income displayed in user's selected currency
+- Change currency anytime from settings
 
 **Confirmation Workflow**
 - Review AI-extracted information before saving
 - Batch confirmation for multiple expenses
 - Easy cancellation and modification
 
+### 💰 Income Tracking
+
+**Income Management**
+- Track monthly and daily income
+- Text and voice input support
+- AI-powered income extraction
+- Income type classification (monthly/daily)
+
+**Income Features**
+- Natural language input: `"I earned 5000 yuan this month"`
+- Voice message support for income entry
+- Income confirmation workflow
+- Income included in financial reports
+
 ### 📊 Advanced Reporting & Analytics
 
 **Natural Language Queries**
 - Ask questions in plain language: `"Show my food expenses this month"`
-- Conversational report generation
-- Context-aware responses based on your expense history
+- Conversational report generation in your preferred language
+- Context-aware responses based on your expense and income history
+- Income vs expense balance calculations
 
 **Flexible Time Filtering**
 - Daily, weekly, monthly reports
@@ -87,10 +107,11 @@ The bot understands that managing finances shouldn't be complicated. Whether you
 - Historical data analysis
 
 **Comprehensive Insights**
-- Category-based breakdowns
+- Category-based expense breakdowns
+- Income and expense summaries
+- Balance calculations (income - expenses)
 - Spending trends and patterns
-- Total expense calculations
-- Visual summaries
+- All amounts displayed in your selected currency
 
 ### ⏰ Smart Reminder System
 
@@ -175,7 +196,7 @@ The bot understands that managing finances shouldn't be complicated. Whether you
 | **Speech Recognition** | Vosk | 0.3.45 |
 | **Task Scheduling** | APScheduler | 3.10.4 |
 | **Audio Processing** | FFmpeg, pydub | 0.25.1 |
-| **Timezone Handling** | pytz, timezonefinderL | 2024.1, 0.1.0 |
+| **Timezone Handling** | pytz, timezonefinderL | 2024.1 |
 | **HTTP Requests** | requests | 2.32.4 |
 | **Date Parsing** | python-dateutil | 2.8.2 |
 | **Configuration** | python-dotenv | 1.0.0 |
@@ -461,6 +482,32 @@ Access settings via the ⚙️ Settings button:
 - **Change Language**: Switch between English, Russian, Uzbek
 - **Edit Profile**: Update your display name
 - **Change Timezone**: Update timezone (location or country name)
+- **Change Currency**: Update your default currency preference
+- **Delete Account**: Permanently delete your account and all data (with confirmation)
+
+### Tracking Income
+
+#### Adding Income
+
+**Via Text:**
+```
+User: "I earned 5000 yuan this month"
+Bot: [Shows income for confirmation]
+     Amount: 5000.00 CNY
+     Type: Monthly
+     Description: (if provided)
+     [Yes] [No]
+```
+
+**Via Voice:**
+1. Tap Income button
+2. Speak: "Earned 3000 dollars today"
+3. Bot transcribes and extracts income
+4. Confirm to save
+
+#### Income Types
+- **Monthly Income**: Regular monthly earnings
+- **Daily Income**: Daily earnings or one-time income
 
 ### Daily Expense Reminders
 
@@ -474,6 +521,20 @@ Every day at 20:00 (8 PM) in your local timezone, you'll automatically receive:
 
 **Uzbek:**
 > 💰 Kunlik eslatma: Bugungi xarajatlaringizni kiritishni unutmang! Xarajatlaringizni yozib olish sizga moliyaviy holatingizni nazorat qilishda yordam beradi.
+
+### Supporting the Project
+
+SmartExpenseBot is free to use, but your support helps maintain and improve the project!
+
+**Donation Options:**
+- **⭐ Telegram Stars**: Quick and easy donations via Telegram
+  - Preset amounts: 10, 50, 100 stars
+  - Custom amount option
+- **🇺🇿 Tirikchilik.uz**: For users in Uzbekistan
+- **💎 Patreon**: Monthly subscription support
+- **🐙 GitHub Sponsors**: For developers
+
+Access donations via the "About Us" → "Donate" menu. All donations are greatly appreciated! 🙏
 
 ## 🏗 Architecture
 
@@ -531,11 +592,17 @@ The bot uses **three specialized AI instances** from DeepSeek:
 - **Output**: IANA timezone name
 - **Specialization**: Multi-language country recognition
 
-#### 4. DeepSeek_AI_data: Report Generation
-- **Purpose**: Generate comprehensive expense reports
-- **Input**: User's report query + expense data from database
-- **Output**: Natural language report with insights
-- **Specialization**: Data analysis, pattern recognition
+#### 4. DeepSeek_AI_Income: Income Extraction
+- **Purpose**: Extract income information from natural language
+- **Input**: User's income description (text or transcribed voice)
+- **Output**: Structured income data (amount, currency, type, description)
+- **Specialization**: Income type detection (monthly/daily), currency detection
+
+#### 5. DeepSeek_AI_data: Report Generation
+- **Purpose**: Generate comprehensive financial reports with income and expenses
+- **Input**: User's report query + expense/income data from database + user currency
+- **Output**: Natural language report with insights in user's language
+- **Specialization**: Data analysis, pattern recognition, balance calculations
 
 ### Database Schema
 
@@ -546,18 +613,29 @@ User
 ├── name
 ├── language (default: 'en')
 ├── timezone (default: 'UTC')
-├── currency (default: 'USD')
+├── currency (default: 'USD')  # Single currency for all financial operations
 ├── created_at
 ├── expenses (1-to-Many)
+├── incomes (1-to-Many)
 └── reminders (1-to-Many)
 
 Expense
 ├── id (PK)
 ├── user_id (FK → User.id)
 ├── amount
-├── currency
 ├── category
 ├── description
+├── date (Indexed)
+└── created_at
+Note: Expenses use currency from User table (not stored separately)
+
+Income
+├── id (PK)
+├── user_id (FK → User.id)
+├── amount
+├── currency (stored for compatibility, but always matches User.currency)
+├── description
+├── income_type ('monthly' or 'daily')
 ├── date (Indexed)
 └── created_at
 
@@ -586,6 +664,8 @@ SmartExpenseBot/
 │   ├── __init__.py
 │   ├── expense_handler.py         # Expense tracking logic
 │   │   └── ExpenseHandler class
+│   ├── income_handler.py          # Income tracking logic
+│   │   └── IncomeHandler class
 │   ├── report_handler.py          # Report generation logic
 │   │   └── ReportHandler class
 │   ├── reminder_handler.py        # Reminder management
@@ -593,15 +673,16 @@ SmartExpenseBot/
 │   │   └── Helper functions (timezone detection)
 │   ├── settings_handler.py        # User settings management
 │   │   └── SettingsHandler class
-│   └── about_handler.py           # About page & feedback
+│   └── about_handler.py           # About page, feedback & donations
 │       └── AboutHandler class
 │
 ├── ai_functions.py                # DeepSeek AI integration
 │   ├── deepseek_ai_expense()      # Expense extraction
 │   ├── deepseek_ai_expense_multiple()  # Multiple expense extraction
+│   ├── deepseek_ai_income()       # Income extraction
 │   ├── deepseek_ai_reminder()     # Time parsing
 │   ├── deepseek_ai_country()      # Country detection
-│   ├── deepseek_ai_report()       # Report generation
+│   ├── deepseek_ai_report()       # Report generation (with income/expense)
 │   └── _extract_expense_manually() # Fallback extraction
 │
 ├── bot.py                         # Main application entry point
@@ -615,6 +696,7 @@ SmartExpenseBot/
 ├── database.py                    # Database layer
 │   ├── User model
 │   ├── Expense model
+│   ├── Income model
 │   ├── Reminder model
 │   └── Database class (CRUD operations)
 │
@@ -687,6 +769,12 @@ db.update_user_currency(telegram_id: int, currency: str)
 
 # Get all users with timezone set
 users = db.get_all_users_with_timezone() -> List[User]
+
+# Check if user exists
+exists = db.user_exists(telegram_id: int) -> bool
+
+# Delete user and all related data
+success = db.delete_user(telegram_id: int) -> bool
 ```
 
 #### Expense Management
@@ -709,6 +797,27 @@ expenses = db.get_expenses(
     category: str = None,
     limit: int = 100
 ) -> List[Expense]
+```
+
+#### Income Management
+
+```python
+# Add income (uses user's currency from User table)
+income = db.add_income(
+    telegram_id: int,
+    amount: float,
+    currency: str = None,  # Optional, uses User.currency if not provided
+    description: str = None,
+    income_type: str = 'monthly'  # 'monthly' or 'daily'
+) -> Income
+
+# Get incomes with filters
+incomes = db.get_incomes(
+    telegram_id: int,
+    start_date: datetime = None,
+    end_date: datetime = None,
+    limit: int = 100
+) -> List[Income]
 ```
 
 #### Reminder Management
@@ -775,6 +884,20 @@ timezone = deepseek_ai_country(
 ) -> Optional[str]  # IANA timezone name
 ```
 
+#### Income Extraction
+
+```python
+from ai_functions import deepseek_ai_income
+
+result = deepseek_ai_income(
+    text: str,
+    lang: str = "en",
+    default_currency: str = "USD"
+) -> Dict[str, Any]
+# Returns: {"amount": float, "currency": str, "description": str,
+#           "income_type": str}  # 'monthly' or 'daily'
+```
+
 #### Report Generation
 
 ```python
@@ -783,8 +906,9 @@ from ai_functions import deepseek_ai_report
 report = deepseek_ai_report(
     text: str,
     lang: str = "en",
-    expenses_data: List[Expense] = None
-) -> str  # Natural language report
+    expenses_data: List[Union[Expense, Income]] = None,
+    user_currency: str = "USD"  # User's currency from User table
+) -> str  # Natural language report in user's language
 ```
 
 ## 🔧 Troubleshooting
@@ -971,6 +1095,12 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 
 ## 👤 Author & Support
 
+### Version
+
+**Current Version**: v1.2.0
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history and upgrade notes.
+
 ### Author
 
 **Botir Bakhtiyarov**
@@ -984,6 +1114,17 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 - **GitHub Issues**: [Report Bugs or Request Features](https://github.com/botirbakhtiyarov/SmartExpenseBot/issues)
 - **Telegram**: Use the bot's "About Us" → "Feedback" feature
 - **Email**: botirbakhtiyarovb@gmail.com
+
+### Support the Project
+
+If you find SmartExpenseBot useful, please consider supporting its development:
+
+- **⭐ Telegram Stars**: Quick donations via Telegram
+- **🇺🇿 Tirikchilik.uz**: [Support via Tirikchilik](https://tirikchilik.uz/botir)
+- **💎 Patreon**: [Monthly Support](https://www.patreon.com/15097645/join)
+- **🐙 GitHub Sponsors**: [Sponsor on GitHub](https://github.com/sponsors/botirbakhtiyarov)
+
+Every contribution helps improve the bot! 🙏
 
 ### Acknowledgments
 
