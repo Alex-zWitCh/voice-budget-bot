@@ -196,7 +196,7 @@ The bot understands that managing finances shouldn't be complicated. Whether you
 | **Speech Recognition** | Vosk | 0.3.45 |
 | **Task Scheduling** | APScheduler | 3.10.4 |
 | **Audio Processing** | FFmpeg, pydub | 0.25.1 |
-| **Timezone Handling** | pytz, timezonefinderL | 2024.1, 0.1.0 |
+| **Timezone Handling** | pytz, timezonefinderL | 2024.1 |
 | **HTTP Requests** | requests | 2.32.4 |
 | **Date Parsing** | python-dateutil | 2.8.2 |
 | **Configuration** | python-dotenv | 1.0.0 |
