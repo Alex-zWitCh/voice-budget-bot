@@ -10,7 +10,12 @@ import logging
 from database import Database
 from ai_functions import deepseek_ai_income
 from translations import get_translation
-from keyboards import create_back_keyboard, create_confirm_keyboard, create_main_keyboard
+from keyboards import (
+    create_back_keyboard,
+    create_confirm_keyboard,
+    create_currency_keyboard,
+    create_main_keyboard,
+)
 from voice_transcriber import VoiceTranscriber
 
 logger = logging.getLogger(__name__)

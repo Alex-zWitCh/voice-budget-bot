@@ -5,6 +5,22 @@ All notable changes to SmartExpenseBot will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2025-11-18
+
+### Added
+- **Timezone Change via Text**: Settings now offer an “Enter Country” option so users can type a country name in any supported language when adjusting their timezone.
+- **Country Prompt Translations**: Added `enter_country_prompt` strings (Uzbek, Russian, English) reused across onboarding and settings instructions.
+
+### Changed
+- **Timezone Flow**: The settings keyboard now shows both “Share Location” and “Enter Country”, and the handler keeps users in timezone-changing mode until they provide a valid country or tap Back.
+- **Currency Selection UX**: Currency callbacks resume whichever flow triggered the selection (expense or income) instead of always jumping into expense entry.
+
+### Fixed
+- **Income Currency Selection**: Users who try to log income before choosing a currency are now prompted to pick one and returned to the income prompt afterward.
+- **Settings Country Input**: Country names entered while changing timezone in settings are correctly processed, including reminder rescheduling and proper error feedback when detection fails.
+
+---
+
 ## [1.2.0] - 2025-11-18
 
 ### Added

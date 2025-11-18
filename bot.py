@@ -380,6 +380,7 @@ def currency_callback(call: telebot.types.CallbackQuery):
     
     user = db.get_or_create_user(call.from_user.id, call.from_user.first_name or "User")
     language = user.language or "en"
+    state = user_states.get(call.from_user.id, "none")
     
     bot.answer_callback_query(call.id)
     
@@ -391,31 +392,27 @@ def currency_callback(call: telebot.types.CallbackQuery):
             message_id=call.message.message_id
         )
     
-    # Determine if this is from settings or initial setup
-    # If currency was selected from settings, user clicked "settings_currency" before this
-    # We can detect this by checking if user is NOT in any active mode
-    is_from_settings = (
-        call.from_user.id not in expense_handler.active_expense_mode and 
-        call.from_user.id not in income_handler.active_income_mode and
-        call.from_user.id not in reminder_handler.active_reminder_mode
-    )
+    chat_id = call.message.chat.id if call.message else call.from_user.id
     
-    if is_from_settings:
-        # From settings - just confirm and show main menu
-        bot.send_message(
-            call.message.chat.id if call.message else call.from_user.id,
-            get_translation(language, "main_menu"),
-            reply_markup=create_main_keyboard(language)
-        )
-    else:
-        # From initial setup - enter expense mode
+    if state == "expense":
         expense_handler.active_expense_mode.add(call.from_user.id)
-        user_states[call.from_user.id] = "expense"
-        chat_id = call.message.chat.id if call.message else call.from_user.id
         bot.send_message(
             chat_id,
             get_translation(language, "expense_prompt"),
             reply_markup=create_back_keyboard(language)
+        )
+    elif state == "income":
+        income_handler.active_income_mode.add(call.from_user.id)
+        bot.send_message(
+            chat_id,
+            get_translation(language, "income_prompt"),
+            reply_markup=create_back_keyboard(language)
+        )
+    else:
+        bot.send_message(
+            chat_id,
+            get_translation(language, "main_menu"),
+            reply_markup=create_main_keyboard(language)
         )
 
 
@@ -513,6 +510,7 @@ def text_message_handler(message: telebot.types.Message):
         income_handler.active_income_mode.discard(message.from_user.id)
         report_handler.active_report_mode.discard(message.from_user.id)
         reminder_handler.active_reminder_mode.discard(message.from_user.id)
+        settings_handler.changing_timezone.discard(message.from_user.id)
         user_states[message.from_user.id] = "none"
         bot.reply_to(
             message,
@@ -561,7 +559,7 @@ def text_message_handler(message: telebot.types.Message):
             # User clicked "Enter Country" button - just acknowledge
             bot.reply_to(
                 message,
-                get_translation(language, "request_location_for_timezone")
+                get_translation(language, "enter_country_prompt")
             )
             return
         
@@ -589,6 +587,41 @@ def text_message_handler(message: telebot.types.Message):
                     get_translation(language, "timezone_detection_failed") + "\n" + get_translation(language, "request_location_for_timezone")
                 )
                 return
+    
+    # Check if user is changing timezone from settings
+    if message.from_user.id in settings_handler.changing_timezone:
+        enter_country_texts = [
+            get_translation("en", "enter_country"),
+            get_translation("ru", "enter_country"),
+            get_translation("uz", "enter_country")
+        ]
+        if message.text in enter_country_texts:
+            bot.reply_to(
+                message,
+                get_translation(language, "enter_country_prompt")
+            )
+            return
+        
+        from handlers.reminder_handler import get_timezone_from_country
+        tz_name = get_timezone_from_country(message.text, language=language)
+        if tz_name:
+            try:
+                db.update_user_timezone(message.from_user.id, tz_name)
+                scheduler.reschedule_user_daily_reminder(message.from_user.id, tz_name, language)
+                settings_handler.changing_timezone.discard(message.from_user.id)
+                bot.reply_to(
+                    message,
+                    get_translation(language, "timezone_updated", timezone=tz_name),
+                    reply_markup=create_main_keyboard(language)
+                )
+                return
+            except Exception as e:
+                logger.error(f"Error updating timezone from settings country input: {e}")
+        bot.reply_to(
+            message,
+            get_translation(language, "timezone_detection_failed") + "\n" + get_translation(language, "enter_country_prompt")
+        )
+        return
     
     # Check if user has pending expense or income (waiting for confirmation)
     if message.from_user.id in expense_handler.pending_expenses:

@@ -105,11 +105,12 @@ class SettingsHandler:
         # Request location
         keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
         keyboard.add(types.KeyboardButton(get_translation(language, "share_location"), request_location=True))
+        keyboard.add(types.KeyboardButton(get_translation(language, "enter_country")))
         keyboard.add(types.KeyboardButton(get_translation(language, "back")))
         
         self.bot.send_message(
             call.message.chat.id,
-            get_translation(language, "request_location_for_timezone"),
+            get_translation(language, "request_location_for_timezone") + "\n\n" + get_translation(language, "enter_country_prompt"),
             reply_markup=keyboard
         )
     
