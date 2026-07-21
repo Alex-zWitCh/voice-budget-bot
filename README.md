@@ -2,6 +2,10 @@
 
 Telegram-бот для быстрого голосового учета личного и семейного бюджета.
 
+<p align="center">
+  <img src="assets/readme-description.png" alt="Voice Budget Bot overview" width="900">
+</p>
+
 Пользователь отправляет короткое голосовое сообщение с одной операцией. Бот
 проверяет длительность, нормализует аудио через FFmpeg, распознает речь через
 Groq Whisper, извлекает структуру операции через DeepSeek и сохраняет результат
@@ -27,6 +31,11 @@ income/expense extraction and local storage.
 - защита от дублей по `telegram_chat_id + telegram_message_id`;
 - временные аудиофайлы удаляются после обработки;
 - Docker Compose deployment.
+
+## Bot Assets
+
+- `assets/bot-icon.png` is the source icon for the Telegram bot avatar.
+- `assets/readme-description.png` is the README overview image.
 
 ## Configuration
 
@@ -66,4 +75,3 @@ pytest
 Audio is sent only to Groq for transcription. The transcript is sent to
 DeepSeek for structured extraction. API keys, transcripts, amounts,
 descriptions and raw model responses are not written to logs.
-
