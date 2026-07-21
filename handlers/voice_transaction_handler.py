@@ -53,14 +53,15 @@ class VoiceTransactionHandler:
                 normalized_path = original_path.with_name(f"{original_path.stem}_normalized.ogg")
                 audio_path = normalize_voice(original_path, normalized_path, self.config.voice_sample_rate, self.config.voice_bitrate)
 
+            category_catalog = self.db.get_category_catalog(message.from_user.id)
             transcript = self.transcriber.transcribe(audio_path)
-            payload = self.parser.parse(transcript)
-            parsed = validate_deepseek_payload(payload, transcript, self.config.min_deepseek_confidence)
-            saved = self.db.save_transaction(message, parsed, transcript, self.config)
-            status = f"saved_{parsed.transaction_type.lower()}" if saved else "duplicate"
+            payload = self.parser.parse(transcript, category_catalog)
+            parsed = validate_deepseek_payload(payload, transcript, self.config.min_deepseek_confidence, category_catalog)
+            transaction_id = self.db.save_transaction(message, parsed, transcript, self.config)
+            status = f"saved_{parsed.transaction_type.lower()}" if transaction_id else "duplicate"
             self.db.record_event(message, status, duration_ms=int((time.monotonic() - started) * 1000))
-            if saved:
-                self.bot.reply_to(message, self._success_text(message, parsed))
+            if transaction_id:
+                self.bot.reply_to(message, self._success_text(message, parsed, category_catalog), reply_markup=_delete_keyboard(transaction_id))
         except AudioConversionError:
             self._fail(message, "transcription_failed", "ffmpeg_failed", "⚠️ Не удалось подготовить голосовое сообщение.\nПовторите запись ещё раз.")
         except TranscriptionError:
@@ -104,9 +105,9 @@ class VoiceTransactionHandler:
             output.write(downloaded)
         return path
 
-    def _success_text(self, message, parsed) -> str:
+    def _success_text(self, message, parsed, category_catalog: dict) -> str:
         amount = _format_amount(parsed.amount_minor, parsed.currency)
-        category = category_title(parsed.transaction_type, parsed.category)
+        category = category_catalog.get(parsed.transaction_type, {}).get(parsed.category) or category_title(parsed.transaction_type, parsed.category)
         noun = "расход" if parsed.transaction_type == "EXPENSE" else "доход"
         if message.chat.type in {"group", "supergroup"}:
             name = message.from_user.first_name or message.from_user.username or "Пользователь"
@@ -126,3 +127,10 @@ def _format_amount(amount_minor: int, currency: str) -> str:
         amount = f"{amount},{minor:02d}"
     return f"{amount} {CURRENCY_SYMBOLS.get(currency, currency)}"
 
+
+def _delete_keyboard(transaction_id: int):
+    from telebot import types
+
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Удалить запись", callback_data=f"delete_tx:{transaction_id}"))
+    return keyboard

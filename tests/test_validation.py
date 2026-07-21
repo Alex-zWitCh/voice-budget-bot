@@ -34,6 +34,47 @@ def test_validate_expense_payload():
     assert parsed.category == "PRODUCTS"
 
 
+def test_validate_transfers_category():
+    parsed = validate_deepseek_payload(
+        {
+            "is_financial_record": True,
+            "is_multiple": False,
+            "transaction_type": "EXPENSE",
+            "amount": "5000",
+            "currency": "RUB",
+            "category": "TRANSFERS",
+            "description": "перевод жене",
+            "confidence": 0.9,
+        },
+        "перевел жене пять тысяч",
+        0.7,
+    )
+    assert parsed.category == "TRANSFERS"
+
+
+def test_validate_custom_category():
+    catalog = {
+        "EXPENSE": {"OTHER": "Прочее", "CUSTOM_FAMILY": "Семья"},
+        "INCOME": {"OTHER": "Прочее"},
+    }
+    parsed = validate_deepseek_payload(
+        {
+            "is_financial_record": True,
+            "is_multiple": False,
+            "transaction_type": "EXPENSE",
+            "amount": "1000",
+            "currency": "RUB",
+            "category": "CUSTOM_FAMILY",
+            "description": "семья",
+            "confidence": 0.9,
+        },
+        "тысяча семья",
+        0.7,
+        catalog,
+    )
+    assert parsed.category == "CUSTOM_FAMILY"
+
+
 def test_wrong_category_becomes_other():
     parsed = validate_deepseek_payload(
         {
@@ -64,4 +105,3 @@ def test_rejections(payload, error_code):
     with pytest.raises(ValidationError) as exc:
         validate_deepseek_payload(payload, "текст", 0.7)
     assert exc.value.code == error_code
-

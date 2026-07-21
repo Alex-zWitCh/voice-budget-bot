@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 import requests
 
@@ -9,7 +10,7 @@ class DeepSeekParserError(Exception):
     pass
 
 
-SYSTEM_PROMPT = f"""Ты выполняешь строгое извлечение одной финансовой операции из русского текста.
+SYSTEM_PROMPT_TEMPLATE = """Ты выполняешь строгое извлечение одной финансовой операции из русского текста.
 Операция может быть доходом или расходом.
 
 Верни только валидный JSON без Markdown и пояснений.
@@ -37,14 +38,16 @@ SYSTEM_PROMPT = f"""Ты выполняешь строгое извлечени�
 - если валюта не названа, используй RUB;
 - категория должна соответствовать transaction_type и быть только из списка;
 - если тип понятен, но категория неясна, используй OTHER;
+- денежные переводы другому члену семьи классифицируй как EXPENSE/TRANSFERS;
+- полученные денежные переводы от члена семьи классифицируй как INCOME/TRANSFERS;
 - description должен кратко описывать назначение операции;
 - каждый запрос независим от предыдущих.
 
-Категории расходов:
-{", ".join(EXPENSE_CATEGORIES)}.
+Категории расходов в формате CODE — название:
+{expense_categories}.
 
-Категории доходов:
-{", ".join(INCOME_CATEGORIES)}."""
+Категории доходов в формате CODE — название:
+{income_categories}."""
 
 
 class DeepSeekTransactionParser:
@@ -54,9 +57,14 @@ class DeepSeekTransactionParser:
         self.model = model
         self.timeout_sec = timeout_sec
 
-    def parse(self, transcript: str) -> dict:
+    def parse(self, transcript: str, category_catalog: Optional[dict] = None) -> dict:
+        category_catalog = category_catalog or {"EXPENSE": EXPENSE_CATEGORIES, "INCOME": INCOME_CATEGORIES}
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            expense_categories=_format_category_prompt(category_catalog.get("EXPENSE", EXPENSE_CATEGORIES)),
+            income_categories=_format_category_prompt(category_catalog.get("INCOME", INCOME_CATEGORIES)),
+        )
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Распознанный текст: {transcript}"},
         ]
         payload = {"model": self.model, "messages": messages, "temperature": 0, "response_format": {"type": "json_object"}}
@@ -105,3 +113,7 @@ def _strip_json(content: str) -> str:
         if content.startswith("json"):
             content = content[4:]
     return content.strip()
+
+
+def _format_category_prompt(categories: dict) -> str:
+    return "\n".join(f"- {code} — {title}" for code, title in categories.items())

@@ -12,6 +12,7 @@ EXPENSE_CATEGORIES = {
     "ELECTRONICS": "Техника",
     "EDUCATION": "Образование",
     "GIFTS": "Подарки",
+    "TRANSFERS": "Переводы",
     "TRAVEL": "Путешествия",
     "OTHER": "Прочее",
 }
@@ -24,6 +25,7 @@ INCOME_CATEGORIES = {
     "PENSION": "Пенсия",
     "REFUND": "Возврат",
     "GIFTS_RECEIVED": "Подарок",
+    "TRANSFERS": "Переводы",
     "SALE": "Продажа",
     "INVESTMENT_INCOME": "Инвестиции",
     "OTHER": "Прочее",
@@ -41,3 +43,8 @@ CURRENCY_SYMBOLS = {"RUB": "₽", "USD": "$", "EUR": "€", "GBP": "£", "CNY": 
 def category_title(transaction_type: str, category: str) -> str:
     return CATEGORY_BY_TYPE.get(transaction_type, {}).get(category, "Прочее")
 
+
+def format_categories() -> str:
+    expense = "\n".join(f"- {title}" for title in EXPENSE_CATEGORIES.values())
+    income = "\n".join(f"- {title}" for title in INCOME_CATEGORIES.values())
+    return f"Расходы:\n{expense}\n\nДоходы:\n{income}"

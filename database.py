@@ -8,6 +8,8 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
+from categories import CATEGORY_BY_TYPE
+
 
 class Base(DeclarativeBase):
     pass
@@ -72,6 +74,19 @@ class ProcessingEvent(Base):
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
 
 
+class UserCategory(Base):
+    __tablename__ = "user_categories"
+    __table_args__ = (UniqueConstraint("telegram_user_id", "transaction_type", "code", name="uq_user_categories_code"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    transaction_type: Mapped[str] = mapped_column(String(16), index=True)
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(100))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class Database:
     def __init__(self, sqlite_path: Path):
         sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,7 +134,7 @@ class Database:
         with self.Session() as session:
             return session.query(Transaction).filter_by(telegram_chat_id=chat_id, telegram_message_id=message_id).first() is not None
 
-    def save_transaction(self, message, parsed, transcript: str, config) -> bool:
+    def save_transaction(self, message, parsed, transcript: str, config) -> Optional[int]:
         tx = Transaction(
             telegram_chat_id=message.chat.id,
             telegram_message_id=message.message_id,
@@ -140,9 +155,11 @@ class Database:
         try:
             with self.Session.begin() as session:
                 session.add(tx)
+                session.flush()
+                transaction_id = tx.id
         except IntegrityError:
-            return False
-        return True
+            return None
+        return transaction_id
 
     def record_event(self, message, status: str, error_code: Optional[str] = None, duration_ms: Optional[int] = None) -> None:
         with self.Session.begin() as session:
@@ -156,3 +173,111 @@ class Database:
                     duration_ms=duration_ms,
                 )
             )
+
+    def get_category_catalog(self, telegram_user_id: int) -> dict:
+        catalog = {key: value.copy() for key, value in CATEGORY_BY_TYPE.items()}
+        with self.Session() as session:
+            rows = (
+                session.query(UserCategory)
+                .filter_by(telegram_user_id=telegram_user_id, is_active=True)
+                .order_by(UserCategory.title.asc())
+                .all()
+            )
+            for row in rows:
+                catalog.setdefault(row.transaction_type, {})[row.code] = row.title
+        return catalog
+
+    def add_user_category(self, telegram_user_id: int, transaction_type: str, title: str) -> str:
+        code = _category_code(title)
+        with self.Session.begin() as session:
+            existing = (
+                session.query(UserCategory)
+                .filter_by(telegram_user_id=telegram_user_id, transaction_type=transaction_type, code=code)
+                .first()
+            )
+            if existing:
+                existing.title = title
+                existing.is_active = True
+            else:
+                session.add(UserCategory(telegram_user_id=telegram_user_id, transaction_type=transaction_type, code=code, title=title))
+        return code
+
+    def list_user_categories(self, telegram_user_id: int) -> list[UserCategory]:
+        with self.Session() as session:
+            return (
+                session.query(UserCategory)
+                .filter_by(telegram_user_id=telegram_user_id, is_active=True)
+                .order_by(UserCategory.transaction_type.asc(), UserCategory.title.asc())
+                .all()
+            )
+
+    def deactivate_user_category(self, telegram_user_id: int, category_id: int) -> bool:
+        with self.Session.begin() as session:
+            row = session.query(UserCategory).filter_by(id=category_id, telegram_user_id=telegram_user_id, is_active=True).first()
+            if not row:
+                return False
+            row.is_active = False
+            return True
+
+    def delete_transaction(self, transaction_id: int, telegram_user_id: int, telegram_chat_id: int) -> bool:
+        with self.Session.begin() as session:
+            row = (
+                session.query(Transaction)
+                .filter_by(id=transaction_id, telegram_user_id=telegram_user_id, telegram_chat_id=telegram_chat_id)
+                .first()
+            )
+            if not row:
+                return False
+            session.delete(row)
+            return True
+
+
+def _category_code(title: str) -> str:
+    result = []
+    previous_underscore = False
+    translit = {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "y",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "h",
+        "ц": "c",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "sch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
+    for char in title.lower():
+        chunk = translit.get(char, char)
+        for item in chunk:
+            if item.isalnum():
+                result.append(item.upper())
+                previous_underscore = False
+            elif not previous_underscore:
+                result.append("_")
+                previous_underscore = True
+    code = "".join(result).strip("_")[:48] or "CUSTOM"
+    return f"CUSTOM_{code}"
