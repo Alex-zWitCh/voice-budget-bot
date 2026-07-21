@@ -1,9 +1,11 @@
 import logging
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from categories import CURRENCY_SYMBOLS, category_title
-from schemas import ValidationError, validate_deepseek_payload
+from schemas import ParsedScheduledEvent, ValidationError, validate_voice_intent
 from services.audio_converter import AudioConversionError, normalize_voice
 from services.deepseek_transaction_parser import DeepSeekParserError
 from services.groq_transcriber import TranscriptionError
@@ -27,7 +29,7 @@ class VoiceTransactionHandler:
 
         self.db.upsert_user_and_chat(message)
 
-        if self.db.transaction_exists(message.chat.id, message.message_id):
+        if self.db.transaction_exists(message.chat.id, message.message_id) or self.db.scheduled_event_exists(message.chat.id, message.message_id):
             self.db.record_event(message, "duplicate", "duplicate")
             return
 
@@ -55,8 +57,15 @@ class VoiceTransactionHandler:
 
             category_catalog = self.db.get_category_catalog(message.from_user.id)
             transcript = self.transcriber.transcribe(audio_path)
-            payload = self.parser.parse(transcript, category_catalog)
-            parsed = validate_deepseek_payload(payload, transcript, self.config.min_deepseek_confidence, category_catalog)
+            now_local = datetime.now(ZoneInfo(self.config.app_timezone)).isoformat(timespec="seconds")
+            payload = self.parser.parse_voice_intent(transcript, category_catalog, now_local, self.config.app_timezone)
+            parsed = validate_voice_intent(payload, transcript, self.config.min_deepseek_confidence, category_catalog, self.config.app_timezone)
+            if isinstance(parsed, ParsedScheduledEvent):
+                event_id = self.db.create_scheduled_event(message, parsed, transcript, self.config)
+                self.db.record_event(message, "scheduled" if event_id else "duplicate", duration_ms=int((time.monotonic() - started) * 1000))
+                if event_id:
+                    self.bot.reply_to(message, self._scheduled_text(parsed))
+                return
             transaction_id = self.db.save_transaction(message, parsed, transcript, self.config)
             status = f"saved_{parsed.transaction_type.lower()}" if transaction_id else "duplicate"
             self.db.record_event(message, status, duration_ms=int((time.monotonic() - started) * 1000))
@@ -117,6 +126,20 @@ class VoiceTransactionHandler:
     def _fail(self, message, status: str, error_code: str, text: str) -> None:
         self.db.record_event(message, status, error_code)
         self.bot.reply_to(message, text)
+
+    def _scheduled_text(self, event: ParsedScheduledEvent) -> str:
+        event_at = event.event_at_utc.astimezone(ZoneInfo(self.config.app_timezone)).strftime("%d.%m.%Y %H:%M")
+        recurrence = {
+            "none": "",
+            "daily": "\nПовтор: ежедневно",
+            "weekly": "\nПовтор: еженедельно",
+            "monthly": "\nПовтор: ежемесячно",
+            "yearly": "\nПовтор: ежегодно",
+        }.get(event.recurrence, "")
+        if event.event_type == "DEFERRED_EXPENSE" and event.transaction:
+            amount = _format_amount(event.transaction.amount_minor, event.transaction.currency)
+            return f"✅ Отложенное списание запланировано\n\n{event_at}\n{amount}\n{event.title}{recurrence}"
+        return f"✅ Напоминание запланировано\n\n{event_at}\n{event.title}{recurrence}"
 
 
 def _format_amount(amount_minor: int, currency: str) -> str:

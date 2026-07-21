@@ -13,6 +13,7 @@ from database import Database
 from handlers.voice_transaction_handler import VoiceTransactionHandler
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.groq_transcriber import GroqTranscriber
+from services.scheduler import ScheduledEventRunner, calendar_text
 
 
 def build_bot(config: Config):
@@ -21,6 +22,7 @@ def build_bot(config: Config):
     bot = telebot.TeleBot(config.bot_token)
     db = Database(config.sqlite_db_path)
     category_states = {}
+    scheduler = ScheduledEventRunner(bot, db, config)
     semaphore = threading.BoundedSemaphore(config.max_concurrent_processing)
     handler = VoiceTransactionHandler(
         bot=bot,
@@ -38,6 +40,9 @@ def build_bot(config: Config):
             "SmartExpense 2.0 готов.\n\n"
             "Отправьте короткое голосовое сообщение до 8 секунд с одной операцией: "
             "например, «пятьсот продукты молоко» или «получил зарплату сто тысяч».\n\n"
+            "Также можно голосом создавать отложенные списания и напоминания: "
+            "«20 декабря спишется тысяча за интернет» или "
+            "«напомни через 4 дня в 15:00 сходить в туалет».\n\n"
             "Доступные категории:\n"
             f"{format_categories()}\n\n"
             "P.S. Этот бот создан благодаря моей любимой жене.",
@@ -47,6 +52,10 @@ def build_bot(config: Config):
     @bot.message_handler(commands=["categories"])
     def categories(message):
         bot.reply_to(message, _user_categories_text(db, message.from_user.id), reply_markup=_category_menu_keyboard())
+
+    @bot.message_handler(commands=["calendar", "kalendar"])
+    def calendar(message):
+        bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
 
     @bot.callback_query_handler(func=lambda call: call.data == "cat_add")
     def category_add(call):
@@ -110,7 +119,7 @@ def build_bot(config: Config):
         if message.chat.type == "private":
             bot.reply_to(message, "Первая версия бота принимает только голосовые сообщения до 8 секунд.")
 
-    return bot
+    return bot, scheduler
 
 
 def _category_menu_keyboard():
@@ -145,10 +154,12 @@ def main() -> int:
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    bot = build_bot(config)
+    bot, scheduler = build_bot(config)
+    scheduler.start()
 
     def stop(_signum, _frame):
         logging.getLogger(__name__).info("Stopping bot polling")
+        scheduler.stop()
         bot.stop_polling()
         sys.exit(0)
 
@@ -156,7 +167,10 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop)
 
     logging.getLogger(__name__).info("Voice Budget Bot polling is starting")
-    bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+    finally:
+        scheduler.stop()
     return 0
 
 

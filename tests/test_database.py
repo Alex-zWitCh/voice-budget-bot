@@ -1,8 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from database import Database
-from schemas import ParsedTransaction
+from schemas import ParsedScheduledEvent, ParsedTransaction
+from services.scheduler import ScheduledEventRunner, calendar_text
 
 
 def _message(chat_id=1, message_id=10, user_id=20):
@@ -41,3 +42,38 @@ def test_user_categories(tmp_path):
     assert len(rows) == 1
     assert db.deactivate_user_category(20, rows[0].id) is True
     assert db.list_user_categories(20) == []
+
+
+def test_scheduled_events_calendar_and_deferred_expense(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    message = _message()
+    config = SimpleNamespace(
+        groq_stt_model="whisper-large-v3",
+        deepseek_model="deepseek-chat",
+        processing_version="1.0",
+        app_timezone="Europe/Moscow",
+    )
+    transaction = ParsedTransaction("EXPENSE", 100000, "RUB", "SUBSCRIPTIONS", "интернет", 0.95)
+    event = ParsedScheduledEvent(
+        event_type="DEFERRED_EXPENSE",
+        title="интернет",
+        notify_at_utc=datetime.now(timezone.utc) - timedelta(minutes=1),
+        event_at_utc=datetime.now(timezone.utc),
+        recurrence="monthly",
+        confidence=0.95,
+        transaction=transaction,
+    )
+    event_id = db.create_scheduled_event(message, event, "20 декабря интернет тысяча", config)
+    assert event_id
+    assert db.scheduled_event_exists(1, 10) is True
+
+    text = calendar_text(db, 20, "Europe/Moscow")
+    assert "интернет" in text
+    assert "ежемесячно" in text
+
+    bot = SimpleNamespace(messages=[])
+    bot.send_message = lambda chat_id, text: bot.messages.append((chat_id, text))
+    runner = ScheduledEventRunner(bot, db, config)
+    runner.process_due_events()
+    assert bot.messages
+    assert db.transaction_exists(1, -(event_id * 10_000_000_000 + int(event.event_at_utc.timestamp()) % 10_000_000_000))
