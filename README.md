@@ -1,6 +1,7 @@
-# Voice Budget Bot
+# SmartExpense 2.0
 
 Telegram-бот для быстрого голосового учета личного и семейного бюджета.
+Рабочее имя проекта в коде и документации: Voice Budget Bot.
 
 <p align="center">
   <img src="assets/readme-description.png" alt="Voice Budget Bot overview" width="900">
@@ -16,8 +17,9 @@ Groq Whisper, извлекает структуру операции через 
 This project is based on SmartExpenseBot by Botir Bakhtiyarov and is distributed
 under the MIT License.
 
-The current fork contains a substantial redesign focused on voice-only private
-and family budget tracking, Groq speech recognition, DeepSeek-based
+The bot is named SmartExpense 2.0 in memory of the repository that inspired this
+fork. The current version contains a substantial redesign focused on voice-only
+private and family budget tracking, Groq speech recognition, DeepSeek-based
 income/expense extraction and local storage.
 
 ## MVP Features
