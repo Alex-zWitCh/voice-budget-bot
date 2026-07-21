@@ -17,3 +17,11 @@ All notable changes to Voice Budget Bot will be documented in this file.
 - Added delete button to successful transaction messages.
 - Added Telegram controls for creating and deleting user categories.
 - Added SmartExpense 2.0 welcome text with available categories.
+
+## [0.3.0] - 2026-07-21
+
+### Added
+- Added deferred expenses with automatic future transaction creation.
+- Added one-time and recurring voice reminders.
+- Added `/calendar` command with upcoming events for the next 2 months.
+- Added scheduler loop for due reminders and deferred expenses.

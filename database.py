@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -59,6 +59,34 @@ class Transaction(Base):
     deepseek_model: Mapped[str] = mapped_column(String(64))
     deepseek_confidence: Mapped[float] = mapped_column(Numeric(4, 3))
     processing_version: Mapped[str] = mapped_column(String(32))
+
+
+class ScheduledEvent(Base):
+    __tablename__ = "scheduled_events"
+    __table_args__ = (UniqueConstraint("telegram_chat_id", "telegram_message_id", name="uq_scheduled_events_telegram_message"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    telegram_message_id: Mapped[int] = mapped_column(BigInteger)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    event_type: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    notify_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    event_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    recurrence: Mapped[str] = mapped_column(String(16), default="none", index=True)
+    title: Mapped[str] = mapped_column(Text)
+    transcript: Mapped[str] = mapped_column(Text)
+    transaction_type: Mapped[Optional[str]] = mapped_column(String(16))
+    amount_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    currency: Mapped[Optional[str]] = mapped_column(String(3))
+    category: Mapped[Optional[str]] = mapped_column(String(64))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    groq_model: Mapped[str] = mapped_column(String(64))
+    deepseek_model: Mapped[str] = mapped_column(String(64))
+    deepseek_confidence: Mapped[float] = mapped_column(Numeric(4, 3))
+    processing_version: Mapped[str] = mapped_column(String(32))
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_fired_at_utc: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class ProcessingEvent(Base):
@@ -134,19 +162,45 @@ class Database:
         with self.Session() as session:
             return session.query(Transaction).filter_by(telegram_chat_id=chat_id, telegram_message_id=message_id).first() is not None
 
+    def scheduled_event_exists(self, chat_id: int, message_id: int) -> bool:
+        with self.Session() as session:
+            return session.query(ScheduledEvent).filter_by(telegram_chat_id=chat_id, telegram_message_id=message_id).first() is not None
+
     def save_transaction(self, message, parsed, transcript: str, config) -> Optional[int]:
-        tx = Transaction(
+        return self.create_transaction(
             telegram_chat_id=message.chat.id,
             telegram_message_id=message.message_id,
             telegram_user_id=message.from_user.id,
+            parsed=parsed,
+            transcript=transcript,
+            message_date_utc=datetime.fromtimestamp(message.date, timezone.utc),
+            voice_duration_sec=message.voice.duration,
+            config=config,
+        )
+
+    def create_transaction(
+        self,
+        telegram_chat_id: int,
+        telegram_message_id: int,
+        telegram_user_id: int,
+        parsed,
+        transcript: str,
+        message_date_utc: datetime,
+        voice_duration_sec: int,
+        config,
+    ) -> Optional[int]:
+        tx = Transaction(
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=telegram_message_id,
+            telegram_user_id=telegram_user_id,
             transaction_type=parsed.transaction_type,
             amount_minor=parsed.amount_minor,
             currency=parsed.currency,
             category=parsed.category,
             description=parsed.description,
             transcript=transcript,
-            message_date_utc=datetime.fromtimestamp(message.date, timezone.utc),
-            voice_duration_sec=message.voice.duration,
+            message_date_utc=message_date_utc,
+            voice_duration_sec=voice_duration_sec,
             groq_model=config.groq_stt_model,
             deepseek_model=config.deepseek_model,
             deepseek_confidence=parsed.confidence,
@@ -160,6 +214,36 @@ class Database:
         except IntegrityError:
             return None
         return transaction_id
+
+    def create_scheduled_event(self, message, event, transcript: str, config) -> Optional[int]:
+        scheduled = ScheduledEvent(
+            telegram_chat_id=message.chat.id,
+            telegram_message_id=message.message_id,
+            telegram_user_id=message.from_user.id,
+            event_type=event.event_type,
+            notify_at_utc=event.notify_at_utc,
+            event_at_utc=event.event_at_utc,
+            recurrence=event.recurrence,
+            title=event.title,
+            transcript=transcript,
+            transaction_type=event.transaction.transaction_type if event.transaction else None,
+            amount_minor=event.transaction.amount_minor if event.transaction else None,
+            currency=event.transaction.currency if event.transaction else None,
+            category=event.transaction.category if event.transaction else None,
+            description=event.transaction.description if event.transaction else None,
+            groq_model=config.groq_stt_model,
+            deepseek_model=config.deepseek_model,
+            deepseek_confidence=event.confidence,
+            processing_version=config.processing_version,
+        )
+        try:
+            with self.Session.begin() as session:
+                session.add(scheduled)
+                session.flush()
+                event_id = scheduled.id
+        except IntegrityError:
+            return None
+        return event_id
 
     def record_event(self, message, status: str, error_code: Optional[str] = None, duration_ms: Optional[int] = None) -> None:
         with self.Session.begin() as session:
@@ -231,6 +315,82 @@ class Database:
             session.delete(row)
             return True
 
+    def get_due_scheduled_events(self, now_utc: datetime) -> list[ScheduledEvent]:
+        with self.Session() as session:
+            return (
+                session.query(ScheduledEvent)
+                .filter(ScheduledEvent.status == "active", ScheduledEvent.notify_at_utc <= now_utc)
+                .order_by(ScheduledEvent.notify_at_utc.asc())
+                .limit(20)
+                .all()
+            )
+
+    def complete_scheduled_event(self, event_id: int, fired_at_utc: datetime) -> None:
+        with self.Session.begin() as session:
+            row = session.query(ScheduledEvent).filter_by(id=event_id).first()
+            if row:
+                row.status = "done"
+                row.last_fired_at_utc = fired_at_utc
+
+    def reschedule_event(self, event_id: int, notify_at_utc: datetime, event_at_utc: datetime, fired_at_utc: datetime) -> None:
+        with self.Session.begin() as session:
+            row = session.query(ScheduledEvent).filter_by(id=event_id).first()
+            if row:
+                row.notify_at_utc = notify_at_utc
+                row.event_at_utc = event_at_utc
+                row.last_fired_at_utc = fired_at_utc
+
+    def list_calendar_events(self, telegram_user_id: int, start_utc: datetime, end_utc: datetime) -> list[dict]:
+        with self.Session() as session:
+            rows = (
+                session.query(ScheduledEvent)
+                .filter(
+                    ScheduledEvent.telegram_user_id == telegram_user_id,
+                    ScheduledEvent.status == "active",
+                    ScheduledEvent.event_at_utc <= end_utc,
+                )
+                .order_by(ScheduledEvent.event_at_utc.asc())
+                .all()
+            )
+        events = []
+        for row in rows:
+            notify_at = _as_utc(row.notify_at_utc)
+            event_at = _as_utc(row.event_at_utc)
+            while event_at < start_utc and row.recurrence != "none":
+                notify_at = add_recurrence(notify_at, row.recurrence)
+                event_at = add_recurrence(event_at, row.recurrence)
+            if start_utc <= event_at <= end_utc:
+                events.append(
+                    {
+                        "id": row.id,
+                        "event_type": row.event_type,
+                        "title": row.title,
+                        "event_at_utc": event_at,
+                        "notify_at_utc": notify_at,
+                        "recurrence": row.recurrence,
+                        "amount_minor": row.amount_minor,
+                        "currency": row.currency,
+                    }
+                )
+            while row.recurrence != "none":
+                notify_at = add_recurrence(notify_at, row.recurrence)
+                event_at = add_recurrence(event_at, row.recurrence)
+                if event_at > end_utc:
+                    break
+                events.append(
+                    {
+                        "id": row.id,
+                        "event_type": row.event_type,
+                        "title": row.title,
+                        "event_at_utc": event_at,
+                        "notify_at_utc": notify_at,
+                        "recurrence": row.recurrence,
+                        "amount_minor": row.amount_minor,
+                        "currency": row.currency,
+                    }
+                )
+        return sorted(events, key=lambda item: item["event_at_utc"])
+
 
 def _category_code(title: str) -> str:
     result = []
@@ -281,3 +441,38 @@ def _category_code(title: str) -> str:
                 previous_underscore = True
     code = "".join(result).strip("_")[:48] or "CUSTOM"
     return f"CUSTOM_{code}"
+
+
+def add_recurrence(value: datetime, recurrence: str) -> datetime:
+    value = _as_utc(value)
+    if recurrence == "daily":
+        return value + timedelta(days=1)
+    if recurrence == "weekly":
+        return value + timedelta(days=7)
+    if recurrence == "monthly":
+        return _add_months(value, 1)
+    if recurrence == "yearly":
+        return _add_months(value, 12)
+    return value
+
+
+def _add_months(value: datetime, months: int) -> datetime:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, _days_in_month(year, month))
+    return value.replace(year=year, month=month, day=day)
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        next_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    return (next_month - timedelta(days=1)).day
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
