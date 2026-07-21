@@ -31,6 +31,9 @@ income/expense extraction and local storage.
 - суммы хранятся как integer minor units, без float;
 - SQLite-таблицы `users`, `chats`, `transactions`, `processing_events`;
 - защита от дублей по `telegram_chat_id + telegram_message_id`;
+- кнопка удаления ошибочно добавленной записи;
+- системная категория `Переводы` для семейных внутренних переводов;
+- пользовательские категории через кнопки в Telegram;
 - временные аудиофайлы удаляются после обработки;
 - Docker Compose deployment.
 

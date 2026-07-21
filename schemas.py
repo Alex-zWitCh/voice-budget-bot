@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Union
+from typing import Optional, Union
 
 from categories import CATEGORY_BY_TYPE, SUPPORTED_CURRENCIES
 
@@ -32,7 +32,13 @@ def amount_to_minor(amount: Union[str, int, float, Decimal], currency: str = "RU
     return int(decimal_amount * 100)
 
 
-def validate_deepseek_payload(payload: dict, transcript: str, min_confidence: float) -> ParsedTransaction:
+def validate_deepseek_payload(
+    payload: dict,
+    transcript: str,
+    min_confidence: float,
+    category_catalog: Optional[dict] = None,
+) -> ParsedTransaction:
+    category_catalog = category_catalog or CATEGORY_BY_TYPE
     if not transcript.strip():
         raise ValidationError("transcription_failed", "⚠️ Речь не распознана.\nПовторите сообщение немного громче и короче.")
     if not payload.get("is_financial_record"):
@@ -65,7 +71,7 @@ def validate_deepseek_payload(payload: dict, transcript: str, min_confidence: fl
         currency = "RUB"
 
     category = str(payload.get("category") or "OTHER").upper()
-    if category not in CATEGORY_BY_TYPE[transaction_type]:
+    if category not in category_catalog[transaction_type]:
         category = "OTHER"
 
     description = str(payload.get("description") or "").strip()
