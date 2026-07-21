@@ -1,185 +1,69 @@
-# SmartExpenseBot
+# Voice Budget Bot
 
-<p align="center">
-  <strong>An intelligent personal finance assistant powered by AI</strong>
-</p>
+Telegram-бот для быстрого голосового учета личного и семейного бюджета.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python 3.8+"/>
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"/>
-  <img src="https://img.shields.io/badge/Telegram-Bot-blue.svg" alt="Telegram Bot"/>
-  <img src="https://img.shields.io/badge/code%20style-PEP%208-orange.svg" alt="PEP 8"/>
-</p>
+Пользователь отправляет короткое голосовое сообщение с одной операцией. Бот
+проверяет длительность, нормализует аудио через FFmpeg, распознает речь через
+Groq Whisper, извлекает структуру операции через DeepSeek и сохраняет результат
+в локальную SQLite-базу.
 
-<p align="center">
-  Track expenses and income, generate reports, and set reminders — all through natural language conversations in your preferred language.
-</p>
+## Project origin
 
----
+This project is based on SmartExpenseBot by Botir Bakhtiyarov and is distributed
+under the MIT License.
 
-## Table of Contents
+The current fork contains a substantial redesign focused on voice-only private
+and family budget tracking, Groq speech recognition, DeepSeek-based
+income/expense extraction and local storage.
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Technology Stack](#technology-stack)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Architecture](#architecture)
-- [Contributing](#contributing)
-- [License](#license)
-- [Author](#author)
+## MVP Features
 
----
-
-## Overview
-
-**SmartExpenseBot** is a sophisticated Telegram bot that makes personal finance management effortless. Instead of filling out forms, users can simply chat with the bot — in text or voice — to record expenses, check balances, and receive intelligent financial reports.
-
-Powered by **DeepSeek AI** and advanced NLP, the bot understands context across Uzbek, Russian, and English.
-
----
-
-## Key Features
-
-- **AI-Powered Intelligence** — Four specialized AI instances handle parsing, categorization, reporting, and reminders.
-- **Universal Language Support** — Full support for English, Russian, and Uzbek with intelligent country detection.
-- **Voice-First Design** — Record expenses and income via voice messages with automatic transcription.
-- **Smart Automation** — Automated daily reminders at personalized times.
-- **Intelligent Reporting** — Ask natural language questions for instant financial insights and balance summaries.
-- **Income Tracking** — Track monthly and daily income alongside expenses.
-- **Unified Currency System** — Single currency preference for all financial operations.
-- **Privacy-Focused** — Local SQLite database by default, with optional PostgreSQL support.
-
----
-
-## Technology Stack
-
-| Component | Technology |
-|-----------|------------|
-| Bot Framework | python-telegram-bot |
-| AI / NLP | DeepSeek AI |
-| Database | SQLite (default) / PostgreSQL (optional) |
-| Scheduling | APScheduler |
-| Language | Python 3.8+ |
-
----
-
-## Installation
-
-### Prerequisites
-
-- Python 3.8 or higher
-- A Telegram Bot Token from [@BotFather](https://t.me/BotFather)
-- DeepSeek AI API key
-
-### Steps
-
-```bash
-# Clone the repository
-git clone https://github.com/BotirBakhtiyarov/SmartExpenseBot.git
-cd SmartExpenseBot
-
-# Create a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env with your Telegram token and DeepSeek API key
-
-# Run the bot
-python main.py
-```
-
----
+- личные чаты и явно разрешенные семейные группы;
+- только Telegram voice до 8 секунд;
+- Groq `whisper-large-v3` для speech-to-text;
+- DeepSeek JSON extraction для `EXPENSE` и `INCOME`;
+- суммы хранятся как integer minor units, без float;
+- SQLite-таблицы `users`, `chats`, `transactions`, `processing_events`;
+- защита от дублей по `telegram_chat_id + telegram_message_id`;
+- временные аудиофайлы удаляются после обработки;
+- Docker Compose deployment.
 
 ## Configuration
 
-Create a `.env` file with the following variables:
+Copy `.env.example` to `.env` and fill secrets outside Git:
 
-```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-DEEPSEEK_API_KEY=your_deepseek_api_key
-DATABASE_URL=sqlite:///expenses.db
+```dotenv
+BOT_TOKEN=
+GROQ_API_KEY=
+DEEPSEEK_API_KEY=
+ALLOWED_CHAT_IDS=
 ```
 
-For PostgreSQL, set:
+When `ALLOWED_CHAT_IDS` is empty, private chats are allowed and groups are
+ignored. For group use, add the group ID, for example:
 
-```env
-DATABASE_URL=postgresql://user:password@localhost:5432/smartexpense
+```dotenv
+ALLOWED_CHAT_IDS=123456789,-1001234567890
 ```
 
----
+## Run
 
-## Usage
-
-Start a conversation with your bot on Telegram and try:
-
-- `I spent 50,000 UZS on lunch today`
-- `Show my monthly report`
-- `Remind me about rent every 1st day`
-- `How much did I earn this month?`
-
----
-
-## Project Structure
-
-```
-SmartExpenseBot/
-├── bot/                # Telegram bot handlers and dialogs
-├── ai/                 # DeepSeek AI integration modules
-├── database/           # Database models and migrations
-├── services/           # Business logic (reports, reminders, parsing)
-├── config.py           # Configuration management
-├── main.py             # Application entry point
-├── requirements.txt    # Python dependencies
-├── .env.example        # Environment variable template
-└── README.md
+```bash
+docker compose up -d --build
 ```
 
----
+For local tests:
 
-## Architecture
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+pytest
+```
 
-SmartExpenseBot uses a modular pipeline architecture:
+## Privacy
 
-1. **Input Layer** — Receives text or voice messages from Telegram.
-2. **AI Parsing Layer** — DeepSeek AI extracts amount, category, date, and type.
-3. **Storage Layer** — Saves transactions to SQLite or PostgreSQL.
-4. **Reporting Layer** — Generates summaries and answers natural language queries.
-5. **Scheduler Layer** — Sends reminders at configured times.
+Audio is sent only to Groq for transcription. The transcript is sent to
+DeepSeek for structured extraction. API keys, transcripts, amounts,
+descriptions and raw model responses are not written to logs.
 
----
-
-## Contributing
-
-Contributions are welcome!
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Commit your changes (`git commit -m 'Add your feature'`)
-4. Push to the branch (`git push origin feature/your-feature`)
-5. Open a Pull Request
-
-Please follow PEP 8 style guidelines.
-
----
-
-## License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-## Author
-
-**Botir Bakhtiyarov**
-
-- Email: hello@bbotir.xyz
-- Website: https://bbotir.xyz
-- Telegram: [@opensource_uz](https://t.me/opensource_uz)

@@ -1,28 +1,6 @@
-# SmartExpenseBot v1.2.0 - Python Dependencies
-
-# Telegram Bot Framework
 pyTelegramBotAPI==4.14.0
-
-# Environment Configuration
 python-dotenv==1.0.0
-
-# Database ORM and Drivers
 SQLAlchemy>=2.0.36
-psycopg2-binary==2.9.10
-
-# Task Scheduling
-APScheduler==3.10.4
-
-# Voice Transcription
-vosk==0.3.45
-pydub==0.25.1
-
-# HTTP Requests
 requests==2.32.4
+pytest==8.3.4
 
-# Date and Time Handling
-python-dateutil==2.8.2
-pytz==2024.1
-
-# Timezone Detection
-timezonefinderL
