@@ -2,6 +2,13 @@
 
 All notable changes to Voice Budget Bot will be documented in this file.
 
+## [1.0.0] - 2026-07-22
+
+### Added
+- Added a root-friendly interactive VPS installer.
+- Documented one-line installation and configuration locations.
+- Added a permanent fork author GitHub link to the bot welcome message.
+
 ## [0.1.0] - 2026-07-21
 
 ### Added
