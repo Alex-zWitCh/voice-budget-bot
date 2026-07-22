@@ -1,6 +1,8 @@
 from categories import format_categories
 
 
+AUTHOR_GITHUB_URL = "https://github.com/Alex-zWitCh"
+
 COMMANDS = [
     ("/start", "приветствие и меню"),
     ("/menu", "показать кнопки меню"),
@@ -26,6 +28,7 @@ def welcome_text(config) -> str:
     ]
     if config.welcome_footer:
         lines.extend(["", config.welcome_footer])
+    lines.extend(["", f"Автор форка: {AUTHOR_GITHUB_URL}"])
     return "\n".join(lines)
 
 
@@ -35,4 +38,3 @@ def commands_text() -> str:
 
 def categories_text() -> str:
     return "Доступные категории:\n\n" + format_categories()
-

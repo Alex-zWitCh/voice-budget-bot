@@ -13,6 +13,10 @@ Groq Whisper, извлекает структуру операции через 
 в локальную SQLite-базу. Приветствие, картинка и подпись настраиваются через
 переменные окружения.
 
+В приветствии всегда показывается ссылка на автора форка:
+<https://github.com/Alex-zWitCh>. Эта ссылка встроена в код и не отключается
+через `.env`.
+
 ## Project origin
 
 This project is based on SmartExpenseBot by Botir Bakhtiyarov and is distributed
@@ -115,6 +119,40 @@ income/expense extraction and local storage.
 - `assets/bot-icon.png` is the source icon for the Telegram bot avatar.
 - `assets/readme-description.png` is the README overview image.
 
+## Install On VPS
+
+Поддерживаемый быстрый сценарий — чистый Ubuntu/Debian VPS, SSH под `root`.
+Установщик проверит окружение, поставит недостающие `curl`, `git`, Docker и
+Docker Compose, запросит токены, создаст `.env`, соберет контейнер и включит
+автозапуск через `restart: unless-stopped`.
+
+Одна строка установки:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Alex-zWitCh/voice-budget-bot/master/scripts/install.sh)"
+```
+
+Что понадобится в процессе:
+
+- Telegram bot token — создается через Telegram-бота `@BotFather`;
+- Groq API key — используется для распознавания голосовых сообщений;
+- DeepSeek API key — используется для извлечения суммы, типа операции, категории и будущих событий;
+- `ALLOWED_CHAT_IDS` — опционально, список разрешенных чатов через запятую;
+- `ALLOWED_USER_IDS` — опционально, список разрешенных пользователей через запятую.
+
+По умолчанию бот ставится в `/opt/voice-budget-bot`.
+
+После установки:
+
+```bash
+cd /opt/voice-budget-bot
+docker compose ps
+docker logs -f voice-budget-bot
+```
+
+Если на сервере доступен только старый `docker-compose`, используйте его вместо
+`docker compose`.
+
 ## Welcome Message
 
 Приветствие настраивается в `.env`:
@@ -129,6 +167,8 @@ WELCOME_IMAGE_PATH=assets/readme-description.png
 По умолчанию текст нейтральный. Чтобы добавить личную подпись, заполните
 `WELCOME_FOOTER`. Категории в приветствии не выводятся целиком: они доступны по
 кнопке `Показать категории`, чтобы не загромождать стартовое сообщение.
+Ссылка на автора форка всегда добавляется отдельно и не зависит от этих
+настроек.
 
 ## Configuration
 
