@@ -14,12 +14,14 @@ from handlers.voice_transaction_handler import VoiceTransactionHandler
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.groq_transcriber import GroqTranscriber
 from services.scheduler import ScheduledEventRunner, calendar_text
+from welcome import COMMANDS, categories_text, commands_text, welcome_text
 
 
 def build_bot(config: Config):
     if proxy_url := os.getenv("PROXY_URL", ""):
         apihelper.proxy = {"https": proxy_url}
     bot = telebot.TeleBot(config.bot_token)
+    _set_bot_commands(bot)
     db = Database(config.sqlite_db_path)
     category_states = {}
     scheduler = ScheduledEventRunner(bot, db, config)
@@ -35,27 +37,24 @@ def build_bot(config: Config):
 
     @bot.message_handler(commands=["start", "help"])
     def start(message):
-        bot.reply_to(
-            message,
-            "SmartExpense 2.0 готов.\n\n"
-            "Отправьте короткое голосовое сообщение до 8 секунд с одной операцией: "
-            "например, «пятьсот продукты молоко» или «получил зарплату сто тысяч».\n\n"
-            "Также можно голосом создавать отложенные списания и напоминания: "
-            "«20 декабря спишется тысяча за интернет» или "
-            "«напомни через 4 дня в 15:00 сходить в туалет».\n\n"
-            "Доступные категории:\n"
-            f"{format_categories()}\n\n"
-            "P.S. Этот бот создан благодаря моей любимой жене.",
-            reply_markup=_category_menu_keyboard(),
-        )
+        _send_welcome(bot, message, config)
+
+    @bot.message_handler(commands=["menu"])
+    def menu(message):
+        bot.reply_to(message, commands_text(), reply_markup=_main_menu_keyboard())
 
     @bot.message_handler(commands=["categories"])
     def categories(message):
         bot.reply_to(message, _user_categories_text(db, message.from_user.id), reply_markup=_category_menu_keyboard())
 
-    @bot.message_handler(commands=["calendar", "kalendar"])
+    @bot.message_handler(commands=["calendar"])
     def calendar(message):
         bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
+
+    @bot.callback_query_handler(func=lambda call: call.data == "show_categories")
+    def show_categories(call):
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, _user_categories_text(db, call.from_user.id), reply_markup=_category_menu_keyboard())
 
     @bot.callback_query_handler(func=lambda call: call.data == "cat_add")
     def category_add(call):
@@ -101,12 +100,22 @@ def build_bot(config: Config):
         if deleted:
             bot.edit_message_text("Запись удалена.", call.message.chat.id, call.message.message_id)
 
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_event:"))
+    def delete_scheduled_event(call):
+        event_id = int(call.data.split(":", 1)[1])
+        deleted = db.delete_scheduled_event(event_id, call.from_user.id, call.message.chat.id)
+        bot.answer_callback_query(call.id, "Событие удалено" if deleted else "Не удалось удалить")
+        if deleted:
+            bot.edit_message_text("Событие удалено.", call.message.chat.id, call.message.message_id)
+
     @bot.message_handler(content_types=["voice"])
     def voice(message):
         handler.handle(message)
 
     @bot.message_handler(content_types=["text", "audio", "video", "video_note", "document", "photo", "sticker", "contact", "location"])
     def unsupported(message):
+        if message.content_type == "text" and _handle_menu_text(bot, db, config, message, category_states):
+            return
         if message.content_type == "text" and message.from_user.id in category_states:
             state = category_states.pop(message.from_user.id)
             title = (message.text or "").strip()
@@ -124,8 +133,17 @@ def build_bot(config: Config):
 
 def _category_menu_keyboard():
     keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Показать категории", callback_data="show_categories"))
     keyboard.add(types.InlineKeyboardButton("Добавить категорию", callback_data="cat_add"))
     keyboard.add(types.InlineKeyboardButton("Удалить свою категорию", callback_data="cat_delete"))
+    return keyboard
+
+
+def _main_menu_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    keyboard.add("Календарь", "Категории")
+    keyboard.add("Добавить категорию", "Удалить категорию")
+    keyboard.add("Команды")
     return keyboard
 
 
@@ -138,6 +156,56 @@ def _user_categories_text(db: Database, telegram_user_id: int) -> str:
             f"- {'Расход' if row.transaction_type == 'EXPENSE' else 'Доход'}: {row.title} ({row.code})" for row in rows
         )
     return f"SmartExpense 2.0\n\nСистемные категории:\n{format_categories()}\n\nВаши категории:\n{custom}"
+
+
+def _set_bot_commands(bot) -> None:
+    try:
+        bot.set_my_commands([types.BotCommand(command.strip("/"), description) for command, description in COMMANDS])
+    except Exception:
+        logging.getLogger(__name__).warning("Could not update Telegram command menu", exc_info=True)
+
+
+def _send_welcome(bot, message, config) -> None:
+    keyboard = _category_menu_keyboard()
+    text = welcome_text(config)
+    image_path = config.welcome_image_path
+    if image_path.exists():
+        with open(image_path, "rb") as image:
+            bot.send_photo(message.chat.id, image, caption=text, reply_markup=keyboard)
+    else:
+        bot.reply_to(message, text, reply_markup=keyboard)
+    bot.send_message(message.chat.id, "Меню доступно кнопками ниже.", reply_markup=_main_menu_keyboard())
+
+
+def _handle_menu_text(bot, db: Database, config: Config, message, category_states: dict) -> bool:
+    text = (message.text or "").strip().lower()
+    if text == "календарь":
+        bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
+        return True
+    if text == "категории":
+        bot.reply_to(message, _user_categories_text(db, message.from_user.id), reply_markup=_category_menu_keyboard())
+        return True
+    if text == "добавить категорию":
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton("Расход", callback_data="cat_add_type:EXPENSE"))
+        keyboard.add(types.InlineKeyboardButton("Доход", callback_data="cat_add_type:INCOME"))
+        bot.reply_to(message, "Для какого типа добавить категорию?", reply_markup=keyboard)
+        return True
+    if text == "удалить категорию":
+        rows = db.list_user_categories(message.from_user.id)
+        if not rows:
+            bot.reply_to(message, "У вас пока нет пользовательских категорий.")
+            return True
+        keyboard = types.InlineKeyboardMarkup()
+        for row in rows:
+            prefix = "Расход" if row.transaction_type == "EXPENSE" else "Доход"
+            keyboard.add(types.InlineKeyboardButton(f"{prefix}: {row.title}", callback_data=f"cat_delete_id:{row.id}"))
+        bot.reply_to(message, "Выберите категорию для удаления:", reply_markup=keyboard)
+        return True
+    if text == "команды":
+        bot.reply_to(message, commands_text(), reply_markup=_main_menu_keyboard())
+        return True
+    return False
 
 
 def main() -> int:
