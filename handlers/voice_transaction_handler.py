@@ -64,7 +64,7 @@ class VoiceTransactionHandler:
                 event_id = self.db.create_scheduled_event(message, parsed, transcript, self.config)
                 self.db.record_event(message, "scheduled" if event_id else "duplicate", duration_ms=int((time.monotonic() - started) * 1000))
                 if event_id:
-                    self.bot.reply_to(message, self._scheduled_text(parsed))
+                    self.bot.reply_to(message, self._scheduled_text(parsed), reply_markup=_delete_event_keyboard(event_id))
                 return
             transaction_id = self.db.save_transaction(message, parsed, transcript, self.config)
             status = f"saved_{parsed.transaction_type.lower()}" if transaction_id else "duplicate"
@@ -156,4 +156,12 @@ def _delete_keyboard(transaction_id: int):
 
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(types.InlineKeyboardButton("Удалить запись", callback_data=f"delete_tx:{transaction_id}"))
+    return keyboard
+
+
+def _delete_event_keyboard(event_id: int):
+    from telebot import types
+
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Удалить событие", callback_data=f"delete_event:{event_id}"))
     return keyboard

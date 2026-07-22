@@ -315,6 +315,18 @@ class Database:
             session.delete(row)
             return True
 
+    def delete_scheduled_event(self, event_id: int, telegram_user_id: int, telegram_chat_id: int) -> bool:
+        with self.Session.begin() as session:
+            row = (
+                session.query(ScheduledEvent)
+                .filter_by(id=event_id, telegram_user_id=telegram_user_id, telegram_chat_id=telegram_chat_id, status="active")
+                .first()
+            )
+            if not row:
+                return False
+            row.status = "deleted"
+            return True
+
     def get_due_scheduled_events(self, now_utc: datetime) -> list[ScheduledEvent]:
         with self.Session() as session:
             return (

@@ -77,3 +77,26 @@ def test_scheduled_events_calendar_and_deferred_expense(tmp_path):
     runner.process_due_events()
     assert bot.messages
     assert db.transaction_exists(1, -(event_id * 10_000_000_000 + int(event.event_at_utc.timestamp()) % 10_000_000_000))
+
+
+def test_delete_scheduled_event(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    message = _message()
+    config = SimpleNamespace(
+        groq_stt_model="whisper-large-v3",
+        deepseek_model="deepseek-chat",
+        processing_version="1.0",
+        app_timezone="Europe/Moscow",
+    )
+    event = ParsedScheduledEvent(
+        event_type="REMINDER",
+        title="проверить меню",
+        notify_at_utc=datetime.now(timezone.utc) + timedelta(days=1),
+        event_at_utc=datetime.now(timezone.utc) + timedelta(days=1),
+        recurrence="none",
+        confidence=0.95,
+    )
+    event_id = db.create_scheduled_event(message, event, "напомни проверить меню", config)
+    assert event_id
+    assert db.delete_scheduled_event(event_id, 20, 1) is True
+    assert db.get_due_scheduled_events(datetime.now(timezone.utc) + timedelta(days=2)) == []

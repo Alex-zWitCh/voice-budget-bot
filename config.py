@@ -38,6 +38,10 @@ class Config:
     log_level: str
     processing_version: str
     max_concurrent_processing: int
+    welcome_title: str
+    welcome_intro: str
+    welcome_footer: str
+    welcome_image_path: Path
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -64,6 +68,13 @@ class Config:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             processing_version=os.getenv("PROCESSING_VERSION", "1.0"),
             max_concurrent_processing=int(os.getenv("MAX_CONCURRENT_PROCESSING", "2")),
+            welcome_title=os.getenv("WELCOME_TITLE", "SmartExpense 2.0"),
+            welcome_intro=os.getenv(
+                "WELCOME_INTRO",
+                "Отправьте короткое голосовое сообщение, чтобы записать доход, расход, напоминание или отложенное списание.",
+            ),
+            welcome_footer=os.getenv("WELCOME_FOOTER", ""),
+            welcome_image_path=Path(os.getenv("WELCOME_IMAGE_PATH", "assets/readme-description.png")),
         )
 
     def validate(self) -> None:
@@ -80,4 +91,3 @@ class Config:
             raise ValueError("MAX_VOICE_DURATION_SEC must be positive")
         if self.max_concurrent_processing <= 0:
             raise ValueError("MAX_CONCURRENT_PROCESSING must be positive")
-

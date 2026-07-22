@@ -25,3 +25,15 @@ All notable changes to Voice Budget Bot will be documented in this file.
 - Added one-time and recurring voice reminders.
 - Added `/calendar` command with upcoming events for the next 2 months.
 - Added scheduler loop for due reminders and deferred expenses.
+
+## [0.4.0] - 2026-07-22
+
+### Added
+- Added configurable welcome message and welcome image settings.
+- Added Telegram command menu and reply keyboard menu.
+- Added delete button for scheduled reminders and deferred expenses.
+- Added README command list and collapsible category list.
+
+### Changed
+- Replaced README overview image with the new `desc3` asset.
+- Removed the `/kalendar` alias; `/calendar` remains the only calendar command.
