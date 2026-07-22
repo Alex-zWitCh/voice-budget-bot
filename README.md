@@ -4,7 +4,7 @@ Telegram-бот для быстрого голосового учета личн
 Рабочее имя проекта в коде и документации: Voice Budget Bot.
 
 <p align="center">
-  <img src="assets/readme-description.png" alt="Voice Budget Bot overview" width="900">
+  <img src="assets/readme-description.png?v=3" alt="Voice Budget Bot overview" width="900">
 </p>
 
 Пользователь отправляет короткое голосовое сообщение с одной операцией. Бот
