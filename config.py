@@ -56,7 +56,7 @@ class Config:
             groq_timeout_sec=int(os.getenv("GROQ_TIMEOUT_SEC", "30")),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
             deepseek_api_url=os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions"),
-            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             deepseek_timeout_sec=int(os.getenv("DEEPSEEK_TIMEOUT_SEC", "30")),
             min_deepseek_confidence=float(os.getenv("MIN_DEEPSEEK_CONFIDENCE", "0.70")),
             reencode_voice=os.getenv("REENCODE_VOICE", "true").lower() in {"1", "true", "yes", "on"},
