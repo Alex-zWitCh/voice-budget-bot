@@ -19,7 +19,7 @@ def _message(chat_id=1, message_id=10, user_id=20):
 def test_save_transaction_is_idempotent(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     message = _message()
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-chat", processing_version="1.0")
+    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     parsed = ParsedTransaction("EXPENSE", 50000, "RUB", "PRODUCTS", "молоко", 0.95)
 
     db.upsert_user_and_chat(message)
@@ -49,7 +49,7 @@ def test_scheduled_events_calendar_and_deferred_expense(tmp_path):
     message = _message()
     config = SimpleNamespace(
         groq_stt_model="whisper-large-v3",
-        deepseek_model="deepseek-chat",
+        deepseek_model="deepseek-v4-flash",
         processing_version="1.0",
         app_timezone="Europe/Moscow",
     )
@@ -84,7 +84,7 @@ def test_delete_scheduled_event(tmp_path):
     message = _message()
     config = SimpleNamespace(
         groq_stt_model="whisper-large-v3",
-        deepseek_model="deepseek-chat",
+        deepseek_model="deepseek-v4-flash",
         processing_version="1.0",
         app_timezone="Europe/Moscow",
     )
