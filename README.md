@@ -30,7 +30,7 @@ income/expense extraction and local storage.
 ## MVP Features
 
 - личные чаты и явно разрешенные семейные группы;
-- только Telegram voice до 8 секунд;
+- только Telegram voice до 16 секунд;
 - Groq `whisper-large-v3` для speech-to-text;
 - DeepSeek JSON extraction для `EXPENSE` и `INCOME`;
 - суммы хранятся как integer minor units, без float;
@@ -208,3 +208,18 @@ pytest
 Audio is sent only to Groq for transcription. The transcript is sent to
 DeepSeek for structured extraction. API keys, transcripts, amounts,
 descriptions and raw model responses are not written to logs.
+
+## Диагностические логи
+
+Для тестовой диагностики задайте `LOG_LEVEL=DEBUG`. Лог приложения хранится в
+`/data/logs/voice-budget-bot.log`; каждый файл ограничен 2 МиБ, сохраняются две предыдущие
+ротации. Docker stdout также ограничен тремя файлами по 2 МиБ:
+
+```dotenv
+LOG_FILE=/data/logs/voice-budget-bot.log
+LOG_MAX_BYTES=2097152
+LOG_BACKUP_COUNT=2
+```
+
+Для эксплуатации используйте Docker Compose v2 (`docker compose`). Устаревший
+`docker-compose` 1.x может не суметь пересоздать контейнер из современного образа.

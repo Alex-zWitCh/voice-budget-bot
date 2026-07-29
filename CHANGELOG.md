@@ -2,6 +2,15 @@
 
 All notable changes to Voice Budget Bot will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Detailed configurable application logs with 2 MiB file rotation and two retained backups.
+- Docker JSON log rotation capped at three files of 2 MiB.
+
+### Changed
+- Default maximum voice-message duration is 16 seconds.
+
 ## [1.0.0] - 2026-07-22
 
 ### Added

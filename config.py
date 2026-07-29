@@ -36,6 +36,9 @@ class Config:
     sqlite_db_path: Path
     app_timezone: str
     log_level: str
+    log_file: Path
+    log_max_bytes: int
+    log_backup_count: int
     processing_version: str
     max_concurrent_processing: int
     welcome_title: str
@@ -49,7 +52,7 @@ class Config:
             bot_token=os.getenv("BOT_TOKEN", ""),
             allowed_chat_ids=_csv_ints(os.getenv("ALLOWED_CHAT_IDS", "")),
             allowed_user_ids=_csv_ints(os.getenv("ALLOWED_USER_IDS", "")),
-            max_voice_duration_sec=int(os.getenv("MAX_VOICE_DURATION_SEC", "8")),
+            max_voice_duration_sec=int(os.getenv("MAX_VOICE_DURATION_SEC", "16")),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             groq_base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3"),
@@ -66,6 +69,9 @@ class Config:
             sqlite_db_path=Path(os.getenv("SQLITE_DB_PATH", "/data/voice_budget_bot.db")),
             app_timezone=os.getenv("APP_TIMEZONE", "Europe/Moscow"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            log_file=Path(os.getenv("LOG_FILE", "/data/logs/voice-budget-bot.log")),
+            log_max_bytes=int(os.getenv("LOG_MAX_BYTES", str(2 * 1024 * 1024))),
+            log_backup_count=int(os.getenv("LOG_BACKUP_COUNT", "2")),
             processing_version=os.getenv("PROCESSING_VERSION", "1.0"),
             max_concurrent_processing=int(os.getenv("MAX_CONCURRENT_PROCESSING", "2")),
             welcome_title=os.getenv("WELCOME_TITLE", "SmartExpense 2.0"),

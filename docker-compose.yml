@@ -14,3 +14,8 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "3"
