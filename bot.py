@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import threading
+from logging.handlers import RotatingFileHandler
 
 import telebot
 from telebot import apihelper, types
@@ -126,7 +127,10 @@ def build_bot(config: Config):
             bot.reply_to(message, f"Категория «{title[:100]}» создана.\nКод: {code}", reply_markup=_category_menu_keyboard())
             return
         if message.chat.type == "private":
-            bot.reply_to(message, "Первая версия бота принимает только голосовые сообщения до 8 секунд.")
+            bot.reply_to(
+                message,
+                f"Первая версия бота принимает только голосовые сообщения до {config.max_voice_duration_sec} секунд.",
+            )
 
     return bot, scheduler
 
@@ -216,9 +220,21 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    config.log_file.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    file_handler = RotatingFileHandler(
+        config.log_file,
+        maxBytes=config.log_max_bytes,
+        backupCount=config.log_backup_count,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[stream_handler, file_handler],
+        force=True,
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
