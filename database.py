@@ -115,6 +115,18 @@ class UserCategory(Base):
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class ReportDelivery(Base):
+    __tablename__ = "report_deliveries"
+    __table_args__ = (UniqueConstraint("telegram_user_id", "report_type", "period_key", name="uq_report_deliveries_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger)
+    report_type: Mapped[str] = mapped_column(String(64), index=True)
+    period_key: Mapped[str] = mapped_column(String(32), index=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class Database:
     def __init__(self, sqlite_path: Path):
         sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,6 +425,58 @@ class Database:
                 .order_by(Transaction.message_date_utc.asc(), Transaction.id.asc())
                 .all()
             )
+
+    def list_previous_month_report_targets(self, start_utc: datetime, end_utc: datetime) -> list[dict]:
+        with self.Session() as session:
+            rows = (
+                session.query(Transaction, Chat)
+                .outerjoin(Chat, Chat.telegram_chat_id == Transaction.telegram_chat_id)
+                .filter(
+                    Transaction.transaction_type == "EXPENSE",
+                    Transaction.message_date_utc >= start_utc,
+                    Transaction.message_date_utc < end_utc,
+                )
+                .order_by(Transaction.telegram_user_id.asc(), Transaction.message_date_utc.desc(), Transaction.id.desc())
+                .all()
+            )
+        targets = {}
+        for transaction, chat in rows:
+            user_id = transaction.telegram_user_id
+            chat_type = chat.chat_type if chat else ""
+            existing = targets.get(user_id)
+            if existing and existing["chat_type"] == "private":
+                continue
+            if not existing or chat_type == "private":
+                targets[user_id] = {
+                    "telegram_user_id": user_id,
+                    "telegram_chat_id": transaction.telegram_chat_id,
+                    "chat_type": chat_type,
+                }
+        return list(targets.values())
+
+    def report_delivery_exists(self, telegram_user_id: int, report_type: str, period_key: str) -> bool:
+        with self.Session() as session:
+            return (
+                session.query(ReportDelivery)
+                .filter_by(telegram_user_id=telegram_user_id, report_type=report_type, period_key=period_key)
+                .first()
+                is not None
+            )
+
+    def record_report_delivery(self, telegram_user_id: int, telegram_chat_id: int, report_type: str, period_key: str) -> bool:
+        try:
+            with self.Session.begin() as session:
+                session.add(
+                    ReportDelivery(
+                        telegram_user_id=telegram_user_id,
+                        telegram_chat_id=telegram_chat_id,
+                        report_type=report_type,
+                        period_key=period_key,
+                    )
+                )
+        except IntegrityError:
+            return False
+        return True
 
 
 def _category_code(title: str) -> str:

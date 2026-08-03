@@ -6,7 +6,8 @@ All notable changes to Voice Budget Bot will be documented in this file.
 
 ### Added
 - Added `/export` CSV.gz transaction export for the last 6 months.
-- Added a previous-calendar-month expense pie chart from the Telegram menu.
+- Added `/report` and a Telegram menu button for a last-30-days expense pie chart.
+- Added automatic previous-calendar-month expense pie chart delivery on the 1st day of each month.
 - Added the default `ALCOHOL` expense category for alcohol purchases.
 - Detailed configurable application logs with 2 MiB file rotation and two retained backups.
 - Docker JSON log rotation capped at three files of 2 MiB.

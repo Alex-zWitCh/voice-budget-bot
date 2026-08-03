@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import gzip
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -86,6 +86,53 @@ def export_transactions_csv_gz(db, telegram_user_id: int, app_timezone: str, out
 def build_previous_month_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
     tz = ZoneInfo(app_timezone)
     start_local, end_local = _previous_month_range(datetime.now(tz))
+    period = start_local.strftime("%m.%Y")
+    filename_suffix = start_local.strftime("%Y-%m")
+    return build_expense_chart(
+        db=db,
+        telegram_user_id=telegram_user_id,
+        app_timezone=app_timezone,
+        output_dir=output_dir,
+        start_local=start_local,
+        end_local=end_local,
+        period_title=period,
+        empty_text=f"За прошлый календарный месяц ({period}) расходов не найдено.",
+        caption=f"Расходы по категориям за {period}",
+        filename_suffix=filename_suffix,
+    )
+
+
+def build_last_30_days_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=30)
+    period = f"{start_local:%d.%m.%Y} - {end_local:%d.%m.%Y}"
+    return build_expense_chart(
+        db=db,
+        telegram_user_id=telegram_user_id,
+        app_timezone=app_timezone,
+        output_dir=output_dir,
+        start_local=start_local,
+        end_local=end_local,
+        period_title="последние 30 дней",
+        empty_text="За последние 30 дней расходов не найдено.",
+        caption=f"Расходы по категориям за 30 дней ({period})",
+        filename_suffix=f"last-30-days-{end_local:%Y-%m-%d}",
+    )
+
+
+def build_expense_chart(
+    db,
+    telegram_user_id: int,
+    app_timezone: str,
+    output_dir: Path,
+    start_local: datetime,
+    end_local: datetime,
+    period_title: str,
+    empty_text: str,
+    caption: str,
+    filename_suffix: str,
+) -> tuple[Path | None, str]:
     rows = db.list_transactions_for_user(telegram_user_id, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc))
     category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
 
@@ -98,14 +145,20 @@ def build_previous_month_expense_chart(db, telegram_user_id: int, app_timezone: 
         title = category_catalog.get("EXPENSE", {}).get(row.category, row.category)
         totals[(row.category, title)] += row.amount_minor
 
-    period = start_local.strftime("%m.%Y")
     if not totals:
-        return None, f"За прошлый календарный месяц ({period}) расходов не найдено."
+        return None, empty_text
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"expenses-{telegram_user_id}-{start_local:%Y-%m}.png"
-    _render_pie_chart(path, totals, currency, period)
-    return path, f"Расходы по категориям за {period}"
+    path = output_dir / f"expenses-{telegram_user_id}-{filename_suffix}.png"
+    _render_pie_chart(path, totals, currency, period_title)
+    return path, caption
+
+
+def previous_month_period(app_timezone: str, now_local: datetime | None = None) -> tuple[datetime, datetime, str]:
+    tz = ZoneInfo(app_timezone)
+    now_local = now_local or datetime.now(tz)
+    start_local, end_local = _previous_month_range(now_local)
+    return start_local, end_local, start_local.strftime("%Y-%m")
 
 
 def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: str, period: str) -> None:
