@@ -258,15 +258,13 @@ class Database:
                 )
             )
 
-    def get_category_catalog(self, telegram_user_id: int) -> dict:
+    def get_category_catalog(self, telegram_user_id: int, active_only: bool = True) -> dict:
         catalog = {key: value.copy() for key, value in CATEGORY_BY_TYPE.items()}
         with self.Session() as session:
-            rows = (
-                session.query(UserCategory)
-                .filter_by(telegram_user_id=telegram_user_id, is_active=True)
-                .order_by(UserCategory.title.asc())
-                .all()
-            )
+            query = session.query(UserCategory).filter_by(telegram_user_id=telegram_user_id)
+            if active_only:
+                query = query.filter_by(is_active=True)
+            rows = query.order_by(UserCategory.title.asc()).all()
             for row in rows:
                 catalog.setdefault(row.transaction_type, {})[row.code] = row.title
         return catalog
@@ -402,6 +400,19 @@ class Database:
                     }
                 )
         return sorted(events, key=lambda item: item["event_at_utc"])
+
+    def list_transactions_for_user(self, telegram_user_id: int, start_utc: datetime, end_utc: datetime) -> list[Transaction]:
+        with self.Session() as session:
+            return (
+                session.query(Transaction)
+                .filter(
+                    Transaction.telegram_user_id == telegram_user_id,
+                    Transaction.message_date_utc >= start_utc,
+                    Transaction.message_date_utc < end_utc,
+                )
+                .order_by(Transaction.message_date_utc.asc(), Transaction.id.asc())
+                .all()
+            )
 
 
 def _category_code(title: str) -> str:

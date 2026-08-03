@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import csv
+import gzip
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import matplotlib
+
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
+
+from categories import CURRENCY_SYMBOLS
+
+
+def export_transactions_csv_gz(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> Path:
+    tz = ZoneInfo(app_timezone)
+    now_local = datetime.now(tz)
+    start_local = _add_months(now_local, -6)
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = now_local.astimezone(timezone.utc)
+    rows = db.list_transactions_for_user(telegram_user_id, start_utc, end_utc)
+    category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"transactions-{telegram_user_id}-last-6-months.csv.gz"
+    with gzip.open(path, "wt", encoding="utf-8-sig", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "id",
+                "date_local",
+                "date_utc",
+                "created_at_utc",
+                "telegram_chat_id",
+                "telegram_message_id",
+                "telegram_user_id",
+                "transaction_type",
+                "amount",
+                "amount_minor",
+                "currency",
+                "category_code",
+                "category_title",
+                "description",
+                "transcript",
+                "voice_duration_sec",
+                "groq_model",
+                "deepseek_model",
+                "deepseek_confidence",
+                "processing_version",
+            ]
+        )
+        for row in rows:
+            category_title = category_catalog.get(row.transaction_type, {}).get(row.category, row.category)
+            date_utc = _as_utc(row.message_date_utc)
+            created_utc = _as_utc(row.created_at_utc)
+            writer.writerow(
+                [
+                    row.id,
+                    date_utc.astimezone(tz).isoformat(timespec="seconds"),
+                    date_utc.isoformat(timespec="seconds"),
+                    created_utc.isoformat(timespec="seconds"),
+                    row.telegram_chat_id,
+                    row.telegram_message_id,
+                    row.telegram_user_id,
+                    row.transaction_type,
+                    f"{row.amount_minor / 100:.2f}",
+                    row.amount_minor,
+                    row.currency,
+                    row.category,
+                    category_title,
+                    row.description,
+                    row.transcript,
+                    row.voice_duration_sec,
+                    row.groq_model,
+                    row.deepseek_model,
+                    float(row.deepseek_confidence),
+                    row.processing_version,
+                ]
+            )
+    return path
+
+
+def build_previous_month_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    start_local, end_local = _previous_month_range(datetime.now(tz))
+    rows = db.list_transactions_for_user(telegram_user_id, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc))
+    category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
+
+    totals: dict[tuple[str, str], int] = defaultdict(int)
+    currency = "RUB"
+    for row in rows:
+        if row.transaction_type != "EXPENSE":
+            continue
+        currency = row.currency
+        title = category_catalog.get("EXPENSE", {}).get(row.category, row.category)
+        totals[(row.category, title)] += row.amount_minor
+
+    period = start_local.strftime("%m.%Y")
+    if not totals:
+        return None, f"За прошлый календарный месяц ({period}) расходов не найдено."
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"expenses-{telegram_user_id}-{start_local:%Y-%m}.png"
+    _render_pie_chart(path, totals, currency, period)
+    return path, f"Расходы по категориям за {period}"
+
+
+def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: str, period: str) -> None:
+    sorted_items = sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    labels = [title for (_code, title), _amount in sorted_items]
+    values = [amount / 100 for _key, amount in sorted_items]
+    total = sum(values)
+    symbol = CURRENCY_SYMBOLS.get(currency, currency)
+
+    fig, ax = plt.subplots(figsize=(9, 7), dpi=160)
+    colors = plt.get_cmap("tab20").colors
+    wedges, _texts, autotexts = ax.pie(
+        values,
+        labels=labels,
+        autopct=lambda pct: _autopct(pct, total, symbol),
+        startangle=90,
+        counterclock=False,
+        colors=colors[: len(values)],
+        pctdistance=0.72,
+        labeldistance=1.08,
+        wedgeprops={"linewidth": 1, "edgecolor": "white"},
+    )
+    for text in autotexts:
+        text.set_fontsize(9)
+        text.set_color("#222222")
+    ax.legend(wedges, labels, title="Категории", loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+    ax.set_title(f"Расходы за {period}\nИтого: {_format_money(total, symbol)}", fontsize=15, pad=18)
+    ax.axis("equal")
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _autopct(pct: float, total: float, symbol: str) -> str:
+    if pct < 4:
+        return ""
+    amount = total * pct / 100
+    return f"{pct:.1f}%\n{_format_money(amount, symbol)}"
+
+
+def _format_money(amount: float, symbol: str) -> str:
+    return f"{amount:,.0f}".replace(",", " ") + f" {symbol}"
+
+
+def _previous_month_range(now_local: datetime) -> tuple[datetime, datetime]:
+    current_month = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start = _add_months(current_month, -1)
+    return start, current_month
+
+
+def _add_months(value: datetime, months: int) -> datetime:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    max_day = _month_days(year, month)
+    return value.replace(year=year, month=month, day=min(value.day, max_day))
+
+
+def _month_days(year: int, month: int) -> int:
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1)
+    else:
+        next_month = datetime(year, month + 1, 1)
+    return (next_month - datetime(year, month, 1)).days
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
