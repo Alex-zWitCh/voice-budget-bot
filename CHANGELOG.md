@@ -5,6 +5,7 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Added the default `ALCOHOL` expense category for alcohol purchases.
 - Detailed configurable application logs with 2 MiB file rotation and two retained backups.
 - Docker JSON log rotation capped at three files of 2 MiB.
 
