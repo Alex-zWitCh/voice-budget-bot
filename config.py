@@ -24,6 +24,12 @@ class Config:
     groq_base_url: str
     groq_stt_model: str
     groq_timeout_sec: int
+    fallback_stt_enabled: bool
+    fallback_stt_api_key: str
+    fallback_stt_base_url: str
+    fallback_stt_model: str
+    fallback_stt_timeout_sec: int
+    fallback_stt_verify_ssl: bool
     deepseek_api_key: str
     deepseek_api_url: str
     deepseek_model: str
@@ -57,6 +63,12 @@ class Config:
             groq_base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3"),
             groq_timeout_sec=int(os.getenv("GROQ_TIMEOUT_SEC", "30")),
+            fallback_stt_enabled=os.getenv("FALLBACK_STT_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+            fallback_stt_api_key=os.getenv("FALLBACK_STT_API_KEY", ""),
+            fallback_stt_base_url=os.getenv("FALLBACK_STT_BASE_URL", ""),
+            fallback_stt_model=os.getenv("FALLBACK_STT_MODEL", "Systran/faster-whisper-small"),
+            fallback_stt_timeout_sec=int(os.getenv("FALLBACK_STT_TIMEOUT_SEC", "120")),
+            fallback_stt_verify_ssl=os.getenv("FALLBACK_STT_VERIFY_SSL", "true").lower() in {"1", "true", "yes", "on"},
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
             deepseek_api_url=os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions"),
             deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
@@ -91,6 +103,11 @@ class Config:
             missing.append("GROQ_API_KEY")
         if not self.deepseek_api_key:
             missing.append("DEEPSEEK_API_KEY")
+        if self.fallback_stt_enabled:
+            if not self.fallback_stt_api_key:
+                missing.append("FALLBACK_STT_API_KEY")
+            if not self.fallback_stt_base_url:
+                missing.append("FALLBACK_STT_BASE_URL")
         if missing:
             raise ValueError(f"Missing required configuration: {', '.join(missing)}")
         if self.max_voice_duration_sec <= 0:

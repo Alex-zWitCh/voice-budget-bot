@@ -151,6 +151,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Alex-zWitCh/voice-budget
 - Telegram bot token — создается через Telegram-бота `@BotFather`;
 - Groq API key — используется для распознавания голосовых сообщений;
 - DeepSeek API key — используется для извлечения суммы, типа операции, категории и будущих событий;
+- fallback STT API key — опционально, резервный OpenAI-compatible сервис распознавания речи;
 - `ALLOWED_CHAT_IDS` — опционально, список разрешенных чатов через запятую;
 - `ALLOWED_USER_IDS` — опционально, список разрешенных пользователей через запятую.
 
@@ -192,6 +193,9 @@ Copy `.env.example` to `.env` and fill secrets outside Git:
 BOT_TOKEN=
 GROQ_API_KEY=
 DEEPSEEK_API_KEY=
+FALLBACK_STT_ENABLED=false
+FALLBACK_STT_API_KEY=
+FALLBACK_STT_BASE_URL=
 ALLOWED_CHAT_IDS=
 ```
 
@@ -219,9 +223,10 @@ pytest
 
 ## Privacy
 
-Audio is sent only to Groq for transcription. The transcript is sent to
-DeepSeek for structured extraction. API keys, transcripts, amounts,
-descriptions and raw model responses are not written to logs.
+Audio is sent to Groq for transcription. If optional fallback STT is enabled
+and Groq returns an error or an empty transcript, the same audio is sent to the
+configured fallback OpenAI-compatible transcription service. The transcript is
+sent to DeepSeek for structured extraction. API keys are not written to logs.
 
 ## Диагностические логи
 

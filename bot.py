@@ -13,7 +13,7 @@ from config import Config
 from database import Database
 from handlers.voice_transaction_handler import VoiceTransactionHandler
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
-from services.groq_transcriber import GroqTranscriber
+from services.groq_transcriber import FallbackTranscriber, GroqTranscriber
 from services.reports import build_last_30_days_expense_chart, export_transactions_csv_gz
 from services.scheduler import ScheduledEventRunner, calendar_text
 from welcome import COMMANDS, categories_text, commands_text, welcome_text
@@ -28,11 +28,22 @@ def build_bot(config: Config):
     category_states = {}
     scheduler = ScheduledEventRunner(bot, db, config)
     semaphore = threading.BoundedSemaphore(config.max_concurrent_processing)
+    transcriber = GroqTranscriber(config.groq_api_key, config.groq_base_url, config.groq_stt_model, config.groq_timeout_sec)
+    if config.fallback_stt_enabled:
+        fallback = GroqTranscriber(
+            config.fallback_stt_api_key,
+            config.fallback_stt_base_url,
+            config.fallback_stt_model,
+            config.fallback_stt_timeout_sec,
+            config.fallback_stt_verify_ssl,
+            "fallback_stt",
+        )
+        transcriber = FallbackTranscriber(transcriber, fallback)
     handler = VoiceTransactionHandler(
         bot=bot,
         db=db,
         config=config,
-        transcriber=GroqTranscriber(config.groq_api_key, config.groq_base_url, config.groq_stt_model, config.groq_timeout_sec),
+        transcriber=transcriber,
         parser=DeepSeekTransactionParser(config.deepseek_api_key, config.deepseek_api_url, config.deepseek_model, config.deepseek_timeout_sec),
         semaphore=semaphore,
     )
