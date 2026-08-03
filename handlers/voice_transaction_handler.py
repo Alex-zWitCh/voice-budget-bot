@@ -1,4 +1,5 @@
 import logging
+import pprint
 import time
 import uuid
 from datetime import datetime
@@ -48,6 +49,8 @@ class VoiceTransactionHandler:
             return
 
         original_path = normalized_path = None
+        transcript = ""
+        payload = None
         try:
             original_path = self._download_voice(message)
             audio_path = original_path
@@ -75,9 +78,11 @@ class VoiceTransactionHandler:
             self._fail(message, "transcription_failed", "ffmpeg_failed", "⚠️ Не удалось подготовить голосовое сообщение.\nПовторите запись ещё раз.")
         except TranscriptionError:
             self._fail(message, "transcription_failed", "groq_failed", "⚠️ Речь не распознана.\nПовторите сообщение немного громче и короче.")
-        except DeepSeekParserError:
+        except DeepSeekParserError as exc:
+            self._log_processing_diagnostics(message, started, "deepseek_failed", transcript, payload, str(exc))
             self._fail(message, "parse_failed", "deepseek_failed", "⚠️ Сервис распознавания временно недоступен.\nПопробуйте отправить сообщение позже.")
         except ValidationError as exc:
+            self._log_processing_diagnostics(message, started, exc.code, transcript, payload, exc.user_message)
             self._fail(message, exc.code, exc.code, exc.user_message)
         except Exception:
             logger.exception(
@@ -127,6 +132,19 @@ class VoiceTransactionHandler:
         self.db.record_event(message, status, error_code)
         self.bot.reply_to(message, text)
 
+    def _log_processing_diagnostics(self, message, started: float, reason: str, transcript: str, payload, details: str) -> None:
+        logger.warning(
+            "Voice transaction rejected chat_id=%s message_id=%s user_id=%s reason=%s duration_ms=%s transcript=%r payload=%s details=%r",
+            message.chat.id,
+            message.message_id,
+            message.from_user.id if message.from_user else 0,
+            reason,
+            int((time.monotonic() - started) * 1000),
+            _truncate(transcript, 2000),
+            _truncate(pprint.pformat(payload, sort_dicts=True, compact=True), 4000),
+            _truncate(details, 1000),
+        )
+
     def _scheduled_text(self, event: ParsedScheduledEvent) -> str:
         event_at = event.event_at_utc.astimezone(ZoneInfo(self.config.app_timezone)).strftime("%d.%m.%Y %H:%M")
         recurrence = {
@@ -165,3 +183,10 @@ def _delete_event_keyboard(event_id: int):
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(types.InlineKeyboardButton("Удалить событие", callback_data=f"delete_event:{event_id}"))
     return keyboard
+
+
+def _truncate(value: str, limit: int) -> str:
+    text = value or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...<truncated {len(text) - limit} chars>"
