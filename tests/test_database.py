@@ -1,8 +1,12 @@
+import csv
+import gzip
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from database import Database
 from schemas import ParsedScheduledEvent, ParsedTransaction
+from services.reports import build_previous_month_expense_chart, export_transactions_csv_gz
 from services.scheduler import ScheduledEventRunner, calendar_text
 
 
@@ -14,6 +18,13 @@ def _message(chat_id=1, message_id=10, user_id=20):
         date=int(datetime(2026, 7, 21, tzinfo=timezone.utc).timestamp()),
         voice=SimpleNamespace(duration=3),
     )
+
+
+def _previous_month_datetime(app_timezone="Europe/Moscow"):
+    tz = ZoneInfo(app_timezone)
+    current_month = datetime.now(tz).replace(day=1, hour=12, minute=0, second=0, microsecond=0)
+    previous_month = current_month - timedelta(days=1)
+    return previous_month.replace(day=min(previous_month.day, 15))
 
 
 def test_save_transaction_is_idempotent(tmp_path):
@@ -100,3 +111,41 @@ def test_delete_scheduled_event(tmp_path):
     assert event_id
     assert db.delete_scheduled_event(event_id, 20, 1) is True
     assert db.get_due_scheduled_events(datetime.now(timezone.utc) + timedelta(days=2)) == []
+
+
+def test_export_transactions_csv_gz_contains_full_transcript(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _message(message_id=50)
+    message.date = int(datetime.now(timezone.utc).timestamp())
+    parsed = ParsedTransaction("EXPENSE", 99800, "RUB", "ALCOHOL", "пиво с закусками", 0.95)
+
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "девятьсот девяносто восемь рублей пиво с закусками", config)
+
+    path = export_transactions_csv_gz(db, 20, "Europe/Moscow", tmp_path)
+
+    with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 1
+    assert rows[0]["category_code"] == "ALCOHOL"
+    assert rows[0]["category_title"] == "Алкоголь"
+    assert rows[0]["transcript"] == "девятьсот девяносто восемь рублей пиво с закусками"
+
+
+def test_previous_month_expense_chart_is_created(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _message(message_id=60)
+    message.date = int(_previous_month_datetime().astimezone(timezone.utc).timestamp())
+    parsed = ParsedTransaction("EXPENSE", 140000, "RUB", "PRODUCTS", "продукты", 0.95)
+
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "тысяча четыреста продукты", config)
+
+    path, caption = build_previous_month_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+
+    assert path is not None
+    assert path.exists()
+    assert path.suffix == ".png"
+    assert "Расходы по категориям" in caption

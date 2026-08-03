@@ -14,6 +14,7 @@ from database import Database
 from handlers.voice_transaction_handler import VoiceTransactionHandler
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.groq_transcriber import GroqTranscriber
+from services.reports import build_previous_month_expense_chart, export_transactions_csv_gz
 from services.scheduler import ScheduledEventRunner, calendar_text
 from welcome import COMMANDS, categories_text, commands_text, welcome_text
 
@@ -51,6 +52,32 @@ def build_bot(config: Config):
     @bot.message_handler(commands=["calendar"])
     def calendar(message):
         bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
+
+    @bot.message_handler(commands=["export"])
+    def export(message):
+        if not _is_allowed_message(config, message):
+            return
+        path = None
+        try:
+            path = export_transactions_csv_gz(db, message.from_user.id, config.app_timezone, config.temp_audio_dir / "reports")
+            with open(path, "rb") as file:
+                bot.send_document(
+                    message.chat.id,
+                    file,
+                    visible_file_name=path.name,
+                    caption="Полная выгрузка ваших транзакций за последние 6 месяцев.",
+                )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not export user transactions user_id=%s", message.from_user.id)
+            bot.reply_to(message, "⚠️ Не удалось подготовить CSV-выгрузку.")
+        finally:
+            if path:
+                path.unlink(missing_ok=True)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "report_prev_month")
+    def report_prev_month(call):
+        bot.answer_callback_query(call.id)
+        _send_previous_month_report(bot, db, config, call.message.chat.id, call.from_user.id)
 
     @bot.callback_query_handler(func=lambda call: call.data == "show_categories")
     def show_categories(call):
@@ -146,6 +173,7 @@ def _category_menu_keyboard():
 def _main_menu_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     keyboard.add("Календарь", "Категории")
+    keyboard.add("Отчет за прошлый месяц")
     keyboard.add("Добавить категорию", "Удалить категорию")
     keyboard.add("Команды")
     return keyboard
@@ -186,6 +214,11 @@ def _handle_menu_text(bot, db: Database, config: Config, message, category_state
     if text == "календарь":
         bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
         return True
+    if text in {"отчет за прошлый месяц", "отчёт за прошлый месяц"}:
+        if not _is_allowed_message(config, message):
+            return True
+        _send_previous_month_report(bot, db, config, message.chat.id, message.from_user.id)
+        return True
     if text == "категории":
         bot.reply_to(message, _user_categories_text(db, message.from_user.id), reply_markup=_category_menu_keyboard())
         return True
@@ -210,6 +243,34 @@ def _handle_menu_text(bot, db: Database, config: Config, message, category_state
         bot.reply_to(message, commands_text(), reply_markup=_main_menu_keyboard())
         return True
     return False
+
+
+def _send_previous_month_report(bot, db: Database, config: Config, chat_id: int, telegram_user_id: int) -> None:
+    path = None
+    try:
+        path, caption = build_previous_month_expense_chart(db, telegram_user_id, config.app_timezone, config.temp_audio_dir / "reports")
+        if not path:
+            bot.send_message(chat_id, caption)
+            return
+        with open(path, "rb") as image:
+            bot.send_photo(chat_id, image, caption=caption)
+    except Exception:
+        logging.getLogger(__name__).exception("Could not build previous month report user_id=%s", telegram_user_id)
+        bot.send_message(chat_id, "⚠️ Не удалось подготовить графический отчет.")
+    finally:
+        if path:
+            path.unlink(missing_ok=True)
+
+
+def _is_allowed_message(config: Config, message) -> bool:
+    user_id = message.from_user.id if message.from_user else 0
+    if config.allowed_user_ids and user_id not in config.allowed_user_ids:
+        return False
+    if message.chat.type in {"group", "supergroup"}:
+        return message.chat.id in config.allowed_chat_ids
+    if config.allowed_chat_ids:
+        return message.chat.id in config.allowed_chat_ids
+    return message.chat.type == "private"
 
 
 def main() -> int:
