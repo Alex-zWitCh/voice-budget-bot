@@ -5,6 +5,7 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Added optional OpenAI-compatible fallback STT provider when Groq transcription fails.
 - Added `/export` CSV.gz transaction export for the last 6 months.
 - Added `/report` and a Telegram menu button for a last-30-days expense pie chart.
 - Added automatic previous-calendar-month expense pie chart delivery on the 1st day of each month.
