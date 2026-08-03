@@ -13,12 +13,8 @@ class GroqTranscriber:
         self.timeout_sec = timeout_sec
 
     def transcribe(self, audio_path) -> str:
-        prompt = (
-            "Короткая голосовая запись одной финансовой операции: дохода или расхода. "
-            "Обычно содержит сумму, валюту и назначение операции."
-        )
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        data = {"model": self.model, "language": "ru", "temperature": "0", "response_format": "json", "prompt": prompt}
+        data = {"model": self.model, "language": "ru", "temperature": "0", "response_format": "json"}
         last_error = None
         for _ in range(2):
             try:
@@ -42,4 +38,3 @@ class GroqTranscriber:
             except (requests.RequestException, ValueError) as exc:
                 last_error = str(exc)
         raise TranscriptionError(last_error or "transcription_failed")
-
