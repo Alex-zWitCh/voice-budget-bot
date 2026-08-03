@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from database import Database
 from schemas import ParsedScheduledEvent, ParsedTransaction
-from services.reports import build_previous_month_expense_chart, export_transactions_csv_gz
+from services.reports import build_last_30_days_expense_chart, build_previous_month_expense_chart, export_transactions_csv_gz
 from services.scheduler import ScheduledEventRunner, calendar_text
 
 
@@ -149,3 +149,55 @@ def test_previous_month_expense_chart_is_created(tmp_path):
     assert path.exists()
     assert path.suffix == ".png"
     assert "Расходы по категориям" in caption
+
+
+def test_last_30_days_expense_chart_is_created(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _message(message_id=61)
+    message.date = int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())
+    parsed = ParsedTransaction("EXPENSE", 140000, "RUB", "PRODUCTS", "продукты", 0.95)
+
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "тысяча четыреста продукты", config)
+
+    path, caption = build_last_30_days_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+
+    assert path is not None
+    assert path.exists()
+    assert "30 дней" in caption
+
+
+def test_monthly_report_is_sent_once_on_first_day(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(
+        groq_stt_model="whisper-large-v3",
+        deepseek_model="deepseek-v4-flash",
+        processing_version="1.0",
+        app_timezone="Europe/Moscow",
+        temp_audio_dir=tmp_path,
+    )
+    message = _message(message_id=62)
+    previous_month = _previous_month_datetime()
+    message.date = int(previous_month.astimezone(timezone.utc).timestamp())
+    parsed = ParsedTransaction("EXPENSE", 140000, "RUB", "PRODUCTS", "продукты", 0.95)
+
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "тысяча четыреста продукты", config)
+
+    bot = SimpleNamespace(photos=[])
+
+    def send_photo(chat_id, image, caption):
+        bot.photos.append((chat_id, caption, image.read(4)))
+
+    bot.send_photo = send_photo
+    runner = ScheduledEventRunner(bot, db, config)
+    first_day = previous_month.replace(day=1) + timedelta(days=40)
+    first_day = first_day.replace(day=1, hour=9, minute=0, second=0, microsecond=0)
+
+    runner._process_monthly_reports(first_day.astimezone(timezone.utc))
+    runner._process_monthly_reports(first_day.astimezone(timezone.utc))
+
+    assert len(bot.photos) == 1
+    assert bot.photos[0][0] == 1
+    assert "Автоматический отчет" in bot.photos[0][1]

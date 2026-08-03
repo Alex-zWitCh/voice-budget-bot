@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from categories import CURRENCY_SYMBOLS
 from database import add_recurrence
 from schemas import ParsedTransaction
+from services.reports import build_previous_month_expense_chart, previous_month_period
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class ScheduledEventRunner:
         now = datetime.now(timezone.utc)
         for event in self.db.get_due_scheduled_events(now):
             self._process_event(event, now)
+        self._process_monthly_reports(now)
 
     def _process_event(self, event, now: datetime) -> None:
         if event.event_type == "DEFERRED_EXPENSE":
@@ -84,6 +86,32 @@ class ScheduledEventRunner:
     def _send_reminder(self, event) -> None:
         event_at = _format_local(event.event_at_utc, self.config.app_timezone)
         self.bot.send_message(event.telegram_chat_id, f"🔔 Напоминание\n\nВ {event_at}: {event.title}")
+
+    def _process_monthly_reports(self, now_utc: datetime) -> None:
+        now_local = now_utc.astimezone(ZoneInfo(self.config.app_timezone))
+        if now_local.day != 1:
+            return
+        start_local, end_local, period_key = previous_month_period(self.config.app_timezone, now_local)
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = end_local.astimezone(timezone.utc)
+        for target in self.db.list_previous_month_report_targets(start_utc, end_utc):
+            user_id = target["telegram_user_id"]
+            chat_id = target["telegram_chat_id"]
+            if self.db.report_delivery_exists(user_id, "monthly_expense_chart", period_key):
+                continue
+            path = None
+            try:
+                path, caption = build_previous_month_expense_chart(self.db, user_id, self.config.app_timezone, self.config.temp_audio_dir / "reports")
+                if not path:
+                    continue
+                with open(path, "rb") as image:
+                    self.bot.send_photo(chat_id, image, caption=f"Автоматический отчет за прошлый месяц\n\n{caption}")
+                self.db.record_report_delivery(user_id, chat_id, "monthly_expense_chart", period_key)
+            except Exception:
+                logger.exception("Monthly expense report failed user_id=%s period=%s", user_id, period_key)
+            finally:
+                if path:
+                    path.unlink(missing_ok=True)
 
 
 def calendar_text(db, telegram_user_id: int, app_timezone: str, months: int = 2) -> str:
@@ -136,4 +164,3 @@ def _as_utc(value) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
