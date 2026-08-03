@@ -1,5 +1,6 @@
 EXPENSE_CATEGORIES = {
     "PRODUCTS": "Продукты",
+    "ALCOHOL": "Алкоголь",
     "CAFE": "Кафе",
     "TRANSPORT": "Транспорт",
     "CAR": "Автомобиль",

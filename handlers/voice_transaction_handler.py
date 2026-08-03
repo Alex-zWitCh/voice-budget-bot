@@ -37,7 +37,7 @@ class VoiceTransactionHandler:
             self.db.record_event(message, "rejected_too_long", "too_long")
             self.bot.reply_to(
                 message,
-                "⚠️ Голосовое сообщение длиннее 8 секунд и не обработано.\n"
+                f"⚠️ Голосовое сообщение длиннее {self.config.max_voice_duration_sec} секунд и не обработано.\n"
                 "Отправьте одну короткую запись дохода или расхода.",
             )
             return

@@ -52,6 +52,24 @@ def test_validate_transfers_category():
     assert parsed.category == "TRANSFERS"
 
 
+def test_validate_alcohol_category():
+    parsed = validate_deepseek_payload(
+        {
+            "is_financial_record": True,
+            "is_multiple": False,
+            "transaction_type": "EXPENSE",
+            "amount": "998",
+            "currency": "RUB",
+            "category": "ALCOHOL",
+            "description": "пиво с закусками",
+            "confidence": 0.9,
+        },
+        "девятьсот девяносто восемь рублей пиво с закусками",
+        0.7,
+    )
+    assert parsed.category == "ALCOHOL"
+
+
 def test_validate_custom_category():
     catalog = {
         "EXPENSE": {"OTHER": "Прочее", "CUSTOM_FAMILY": "Семья"},
