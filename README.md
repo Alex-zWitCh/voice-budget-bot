@@ -1,17 +1,18 @@
 # SmartExpense 2.0
 
-Telegram-бот для быстрого голосового учета личного и семейного бюджета.
+Telegram-бот для быстрого голосового и текстового учета личного и семейного бюджета.
 Рабочее имя проекта в коде и документации: Voice Budget Bot.
 
 <p align="center">
   <img src="assets/readme-description.png?v=3" alt="Voice Budget Bot overview" width="900">
 </p>
 
-Пользователь отправляет короткое голосовое сообщение с одной операцией. Бот
-проверяет длительность, нормализует аудио через FFmpeg, распознает речь через
-Groq Whisper, извлекает структуру операции через DeepSeek и сохраняет результат
-в локальную SQLite-базу. Приветствие, картинка и подпись настраиваются через
-переменные окружения.
+Пользователь отправляет короткое голосовое сообщение или обычный текст с одной
+операцией. Для voice бот проверяет длительность, нормализует аудио через FFmpeg
+и распознает речь через Groq Whisper. Затем и голосовая расшифровка, и текстовый
+ввод проходят один путь: DeepSeek извлекает структуру операции, а результат
+сохраняется в локальную SQLite-базу. Приветствие, картинка и подпись
+настраиваются через переменные окружения.
 
 В приветствии всегда показывается ссылка на автора форка:
 <https://github.com/Alex-zWitCh>. Эта ссылка встроена в код и не отключается
@@ -23,14 +24,14 @@ This project is based on SmartExpenseBot by Botir Bakhtiyarov and is distributed
 under the MIT License.
 
 The bot is named SmartExpense 2.0 in memory of the repository that inspired this
-fork. The current version contains a substantial redesign focused on voice-only
-private and family budget tracking, Groq speech recognition, DeepSeek-based
-income/expense extraction and local storage.
+fork. The current version contains a substantial redesign focused on private and
+family budget tracking, Groq speech recognition, direct text input,
+DeepSeek-based income/expense extraction and local storage.
 
 ## MVP Features
 
 - личные чаты и явно разрешенные семейные группы;
-- только Telegram voice до 16 секунд;
+- Telegram voice до 16 секунд и прямой текстовый ввод операций;
 - Groq `whisper-large-v3` для speech-to-text;
 - DeepSeek JSON extraction для `EXPENSE` и `INCOME`;
 - суммы хранятся как integer minor units, без float;
@@ -197,8 +198,11 @@ FALLBACK_STT_ENABLED=false
 FALLBACK_STT_API_KEY=
 FALLBACK_STT_BASE_URL=
 ALLOWED_CHAT_IDS=
+ALLOWED_USER_IDS=
 ```
 
+When `ALLOWED_USER_IDS` is empty, any Telegram user may use the bot in private
+chat. Fill it later with comma-separated Telegram user IDs to restrict access.
 When `ALLOWED_CHAT_IDS` is empty, private chats are allowed and groups are
 ignored. For group use, add the group ID, for example:
 
@@ -225,8 +229,9 @@ pytest
 
 Audio is sent to Groq for transcription. If optional fallback STT is enabled
 and Groq returns an error or an empty transcript, the same audio is sent to the
-configured fallback OpenAI-compatible transcription service. The transcript is
-sent to DeepSeek for structured extraction. API keys are not written to logs.
+configured fallback OpenAI-compatible transcription service. Voice transcripts
+and direct text messages are sent to DeepSeek for structured extraction. API
+keys are not written to logs.
 
 ## Диагностические логи
 

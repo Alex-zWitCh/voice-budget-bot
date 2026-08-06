@@ -6,12 +6,14 @@ All notable changes to Voice Budget Bot will be documented in this file.
 
 ### Added
 - Added optional OpenAI-compatible fallback STT provider when Groq transcription fails.
+- Added direct text input for transactions, reminders, and deferred expenses through the same parser path as voice transcripts.
 - Added `/export` CSV.gz transaction export for the last 6 months.
 - Added `/report` and a Telegram menu button for a last-30-days expense pie chart.
 - Added automatic previous-calendar-month expense pie chart delivery on the 1st day of each month.
 - Added the default `ALCOHOL` expense category for alcohol purchases.
 - Detailed configurable application logs with 2 MiB file rotation and two retained backups.
 - Docker JSON log rotation capped at three files of 2 MiB.
+- Applied the existing optional `ALLOWED_USER_IDS`/`ALLOWED_CHAT_IDS` access primitive consistently to commands and inline buttons.
 
 ### Changed
 - Default maximum voice-message duration is 16 seconds.

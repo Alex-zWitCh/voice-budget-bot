@@ -179,6 +179,7 @@ class Database:
             return session.query(ScheduledEvent).filter_by(telegram_chat_id=chat_id, telegram_message_id=message_id).first() is not None
 
     def save_transaction(self, message, parsed, transcript: str, config) -> Optional[int]:
+        voice = getattr(message, "voice", None)
         return self.create_transaction(
             telegram_chat_id=message.chat.id,
             telegram_message_id=message.message_id,
@@ -186,7 +187,7 @@ class Database:
             parsed=parsed,
             transcript=transcript,
             message_date_utc=datetime.fromtimestamp(message.date, timezone.utc),
-            voice_duration_sec=message.voice.duration,
+            voice_duration_sec=voice.duration if voice else 0,
             config=config,
         )
 

@@ -89,7 +89,7 @@ class Config:
             welcome_title=os.getenv("WELCOME_TITLE", "SmartExpense 2.0"),
             welcome_intro=os.getenv(
                 "WELCOME_INTRO",
-                "Отправьте короткое голосовое сообщение, чтобы записать доход, расход, напоминание или отложенное списание.",
+                "Отправьте короткое голосовое или текстовое сообщение, чтобы записать доход, расход, напоминание или отложенное списание.",
             ),
             welcome_footer=os.getenv("WELCOME_FOOTER", ""),
             welcome_image_path=Path(os.getenv("WELCOME_IMAGE_PATH", "assets/readme-description.png")),

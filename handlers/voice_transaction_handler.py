@@ -30,7 +30,7 @@ class VoiceTransactionHandler:
 
         self.db.upsert_user_and_chat(message)
 
-        if self.db.transaction_exists(message.chat.id, message.message_id) or self.db.scheduled_event_exists(message.chat.id, message.message_id):
+        if self._already_processed(message):
             self.db.record_event(message, "duplicate", "duplicate")
             return
 
@@ -60,20 +60,7 @@ class VoiceTransactionHandler:
 
             category_catalog = self.db.get_category_catalog(message.from_user.id)
             transcript = self.transcriber.transcribe(audio_path)
-            now_local = datetime.now(ZoneInfo(self.config.app_timezone)).isoformat(timespec="seconds")
-            payload = self.parser.parse_voice_intent(transcript, category_catalog, now_local, self.config.app_timezone)
-            parsed = validate_voice_intent(payload, transcript, self.config.min_deepseek_confidence, category_catalog, self.config.app_timezone)
-            if isinstance(parsed, ParsedScheduledEvent):
-                event_id = self.db.create_scheduled_event(message, parsed, transcript, self.config)
-                self.db.record_event(message, "scheduled" if event_id else "duplicate", duration_ms=int((time.monotonic() - started) * 1000))
-                if event_id:
-                    self.bot.reply_to(message, self._scheduled_text(parsed), reply_markup=_delete_event_keyboard(event_id))
-                return
-            transaction_id = self.db.save_transaction(message, parsed, transcript, self.config)
-            status = f"saved_{parsed.transaction_type.lower()}" if transaction_id else "duplicate"
-            self.db.record_event(message, status, duration_ms=int((time.monotonic() - started) * 1000))
-            if transaction_id:
-                self.bot.reply_to(message, self._success_text(message, parsed, category_catalog), reply_markup=_delete_keyboard(transaction_id))
+            self._process_transcript(message, started, transcript, category_catalog)
         except AudioConversionError:
             self._fail(message, "transcription_failed", "ffmpeg_failed", "⚠️ Не удалось подготовить голосовое сообщение.\nПовторите запись ещё раз.")
         except TranscriptionError:
@@ -97,6 +84,67 @@ class VoiceTransactionHandler:
                 if path:
                     path.unlink(missing_ok=True)
             self.semaphore.release()
+
+    def handle_text(self, message) -> None:
+        """Process a plain text message through the same parser path as STT output."""
+        started = time.monotonic()
+        if not self._is_allowed(message):
+            return
+
+        transcript = (message.text or "").strip()
+        if not transcript:
+            return
+
+        self.db.upsert_user_and_chat(message)
+        if self._already_processed(message):
+            self.db.record_event(message, "duplicate", "duplicate")
+            return
+
+        acquired = self.semaphore.acquire(blocking=False)
+        if not acquired:
+            self.bot.reply_to(message, "Сейчас обрабатываю другие записи. Повторите через несколько секунд.")
+            return
+
+        payload = None
+        try:
+            category_catalog = self.db.get_category_catalog(message.from_user.id)
+            payload = self._process_transcript(message, started, transcript, category_catalog)
+        except DeepSeekParserError as exc:
+            self._log_processing_diagnostics(message, started, "deepseek_failed", transcript, payload, str(exc))
+            self._fail(message, "parse_failed", "deepseek_failed", "⚠️ Сервис распознавания временно недоступен.\nПопробуйте отправить сообщение позже.")
+        except ValidationError as exc:
+            self._log_processing_diagnostics(message, started, exc.code, transcript, payload, exc.user_message)
+            self._fail(message, exc.code, exc.code, exc.user_message)
+        except Exception:
+            logger.exception(
+                "Unhandled text processing error chat_id=%s message_id=%s user_id=%s",
+                message.chat.id,
+                message.message_id,
+                message.from_user.id,
+            )
+            self._fail(message, "parse_failed", "unexpected", "⚠️ Не удалось обработать текстовое сообщение.")
+        finally:
+            self.semaphore.release()
+
+    def _process_transcript(self, message, started: float, transcript: str, category_catalog: dict):
+        now_local = datetime.now(ZoneInfo(self.config.app_timezone)).isoformat(timespec="seconds")
+        payload = self.parser.parse_voice_intent(transcript, category_catalog, now_local, self.config.app_timezone)
+        parsed = validate_voice_intent(payload, transcript, self.config.min_deepseek_confidence, category_catalog, self.config.app_timezone)
+        if isinstance(parsed, ParsedScheduledEvent):
+            event_id = self.db.create_scheduled_event(message, parsed, transcript, self.config)
+            self.db.record_event(message, "scheduled" if event_id else "duplicate", duration_ms=int((time.monotonic() - started) * 1000))
+            if event_id:
+                self.bot.reply_to(message, self._scheduled_text(parsed), reply_markup=_delete_event_keyboard(event_id))
+            return payload
+        transaction_id = self.db.save_transaction(message, parsed, transcript, self.config)
+        status = f"saved_{parsed.transaction_type.lower()}" if transaction_id else "duplicate"
+        self.db.record_event(message, status, duration_ms=int((time.monotonic() - started) * 1000))
+        if transaction_id:
+            self.bot.reply_to(message, self._success_text(message, parsed, category_catalog), reply_markup=_delete_keyboard(transaction_id))
+        return payload
+
+    def _already_processed(self, message) -> bool:
+        return self.db.transaction_exists(message.chat.id, message.message_id) or self.db.scheduled_event_exists(message.chat.id, message.message_id)
 
     def _is_allowed(self, message) -> bool:
         chat_id = message.chat.id

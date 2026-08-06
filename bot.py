@@ -50,18 +50,26 @@ def build_bot(config: Config):
 
     @bot.message_handler(commands=["start", "help"])
     def start(message):
+        if not _is_allowed_message(config, message):
+            return
         _send_welcome(bot, message, config)
 
     @bot.message_handler(commands=["menu"])
     def menu(message):
+        if not _is_allowed_message(config, message):
+            return
         bot.reply_to(message, commands_text(), reply_markup=_main_menu_keyboard())
 
     @bot.message_handler(commands=["categories"])
     def categories(message):
+        if not _is_allowed_message(config, message):
+            return
         bot.reply_to(message, _user_categories_text(db, message.from_user.id), reply_markup=_category_menu_keyboard())
 
     @bot.message_handler(commands=["calendar"])
     def calendar(message):
+        if not _is_allowed_message(config, message):
+            return
         bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
 
     @bot.message_handler(commands=["export"])
@@ -93,11 +101,17 @@ def build_bot(config: Config):
 
     @bot.callback_query_handler(func=lambda call: call.data == "show_categories")
     def show_categories(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         bot.answer_callback_query(call.id)
         bot.send_message(call.message.chat.id, _user_categories_text(db, call.from_user.id), reply_markup=_category_menu_keyboard())
 
     @bot.callback_query_handler(func=lambda call: call.data == "cat_add")
     def category_add(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         bot.answer_callback_query(call.id)
         keyboard = types.InlineKeyboardMarkup()
         keyboard.add(types.InlineKeyboardButton("Расход", callback_data="cat_add_type:EXPENSE"))
@@ -106,6 +120,9 @@ def build_bot(config: Config):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_add_type:"))
     def category_add_type(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         transaction_type = call.data.split(":", 1)[1]
         category_states[call.from_user.id] = {"action": "add_category", "transaction_type": transaction_type}
         bot.answer_callback_query(call.id)
@@ -114,6 +131,9 @@ def build_bot(config: Config):
 
     @bot.callback_query_handler(func=lambda call: call.data == "cat_delete")
     def category_delete(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         rows = db.list_user_categories(call.from_user.id)
         bot.answer_callback_query(call.id)
         if not rows:
@@ -127,6 +147,9 @@ def build_bot(config: Config):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_delete_id:"))
     def category_delete_id(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         category_id = int(call.data.split(":", 1)[1])
         deleted = db.deactivate_user_category(call.from_user.id, category_id)
         bot.answer_callback_query(call.id, "Удалено" if deleted else "Категория не найдена")
@@ -134,6 +157,9 @@ def build_bot(config: Config):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_tx:"))
     def delete_transaction(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         transaction_id = int(call.data.split(":", 1)[1])
         deleted = db.delete_transaction(transaction_id, call.from_user.id, call.message.chat.id)
         bot.answer_callback_query(call.id, "Запись удалена" if deleted else "Не удалось удалить")
@@ -142,6 +168,9 @@ def build_bot(config: Config):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_event:"))
     def delete_scheduled_event(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
         event_id = int(call.data.split(":", 1)[1])
         deleted = db.delete_scheduled_event(event_id, call.from_user.id, call.message.chat.id)
         bot.answer_callback_query(call.id, "Событие удалено" if deleted else "Не удалось удалить")
@@ -154,6 +183,8 @@ def build_bot(config: Config):
 
     @bot.message_handler(content_types=["text", "audio", "video", "video_note", "document", "photo", "sticker", "contact", "location"])
     def unsupported(message):
+        if not _is_allowed_message(config, message):
+            return
         if message.content_type == "text" and _handle_menu_text(bot, db, config, message, category_states):
             return
         if message.content_type == "text" and message.from_user.id in category_states:
@@ -165,10 +196,13 @@ def build_bot(config: Config):
             code = db.add_user_category(message.from_user.id, state["transaction_type"], title[:100])
             bot.reply_to(message, f"Категория «{title[:100]}» создана.\nКод: {code}", reply_markup=_category_menu_keyboard())
             return
+        if message.content_type == "text" and not (message.text or "").lstrip().startswith("/"):
+            handler.handle_text(message)
+            return
         if message.chat.type == "private":
             bot.reply_to(
                 message,
-                f"Первая версия бота принимает только голосовые сообщения до {config.max_voice_duration_sec} секунд.",
+                f"Бот принимает голосовые сообщения до {config.max_voice_duration_sec} секунд или текстовые записи расходов, доходов и напоминаний.",
             )
 
     return bot, scheduler
@@ -276,13 +310,25 @@ def _send_last_30_days_report(bot, db: Database, config: Config, chat_id: int, t
 
 def _is_allowed_message(config: Config, message) -> bool:
     user_id = message.from_user.id if message.from_user else 0
+    return _is_allowed_identity(config, user_id, message.chat.id, message.chat.type)
+
+
+def _is_allowed_call(config: Config, call) -> bool:
+    user_id = call.from_user.id if call.from_user else 0
+    chat = call.message.chat if call.message else None
+    chat_id = chat.id if chat else 0
+    chat_type = chat.type if chat else "private"
+    return _is_allowed_identity(config, user_id, chat_id, chat_type)
+
+
+def _is_allowed_identity(config: Config, user_id: int, chat_id: int, chat_type: str) -> bool:
     if config.allowed_user_ids and user_id not in config.allowed_user_ids:
         return False
-    if message.chat.type in {"group", "supergroup"}:
-        return message.chat.id in config.allowed_chat_ids
+    if chat_type in {"group", "supergroup"}:
+        return chat_id in config.allowed_chat_ids
     if config.allowed_chat_ids:
-        return message.chat.id in config.allowed_chat_ids
-    return message.chat.type == "private"
+        return chat_id in config.allowed_chat_ids
+    return chat_type == "private"
 
 
 def main() -> int:
