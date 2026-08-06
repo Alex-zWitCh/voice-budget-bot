@@ -433,7 +433,6 @@ class Database:
                 session.query(Transaction, Chat)
                 .outerjoin(Chat, Chat.telegram_chat_id == Transaction.telegram_chat_id)
                 .filter(
-                    Transaction.transaction_type == "EXPENSE",
                     Transaction.message_date_utc >= start_utc,
                     Transaction.message_date_utc < end_utc,
                 )

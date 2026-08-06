@@ -6,7 +6,13 @@ from zoneinfo import ZoneInfo
 
 from database import Database
 from schemas import ParsedScheduledEvent, ParsedTransaction
-from services.reports import build_last_30_days_expense_chart, build_previous_month_expense_chart, export_transactions_csv_gz
+from services.reports import (
+    build_last_30_days_expense_chart,
+    build_last_30_days_income_chart,
+    build_previous_month_expense_chart,
+    build_previous_month_income_chart,
+    export_transactions_csv_gz,
+)
 from services.scheduler import ScheduledEventRunner, calendar_text
 
 
@@ -123,7 +129,10 @@ def test_export_transactions_csv_gz_contains_full_transcript(tmp_path):
     db.upsert_user_and_chat(message)
     db.save_transaction(message, parsed, "девятьсот девяносто восемь рублей пиво с закусками", config)
 
-    path = export_transactions_csv_gz(db, 20, "Europe/Moscow", tmp_path)
+    tz = ZoneInfo("Europe/Moscow")
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=1)
+    path = export_transactions_csv_gz(db, 20, "Europe/Moscow", tmp_path, start_local, end_local, "test-period")
 
     with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as file:
         rows = list(csv.DictReader(file))
@@ -151,6 +160,24 @@ def test_previous_month_expense_chart_is_created(tmp_path):
     assert "Расходы по категориям" in caption
 
 
+def test_previous_month_income_chart_is_created(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _message(message_id=63)
+    message.date = int(_previous_month_datetime().astimezone(timezone.utc).timestamp())
+    parsed = ParsedTransaction("INCOME", 10000000, "RUB", "SALARY", "зарплата", 0.95)
+
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "получил зарплату сто тысяч", config)
+
+    path, caption = build_previous_month_income_chart(db, 20, "Europe/Moscow", tmp_path)
+
+    assert path is not None
+    assert path.exists()
+    assert path.suffix == ".png"
+    assert "Доходы по категориям" in caption
+
+
 def test_last_30_days_expense_chart_is_created(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
@@ -162,6 +189,23 @@ def test_last_30_days_expense_chart_is_created(tmp_path):
     db.save_transaction(message, parsed, "тысяча четыреста продукты", config)
 
     path, caption = build_last_30_days_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+
+    assert path is not None
+    assert path.exists()
+    assert "30 дней" in caption
+
+
+def test_last_30_days_income_chart_is_created(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _message(message_id=64)
+    message.date = int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())
+    parsed = ParsedTransaction("INCOME", 10000000, "RUB", "SALARY", "зарплата", 0.95)
+
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "получил зарплату сто тысяч", config)
+
+    path, caption = build_last_30_days_income_chart(db, 20, "Europe/Moscow", tmp_path)
 
     assert path is not None
     assert path.exists()
@@ -184,13 +228,22 @@ def test_monthly_report_is_sent_once_on_first_day(tmp_path):
 
     db.upsert_user_and_chat(message)
     db.save_transaction(message, parsed, "тысяча четыреста продукты", config)
+    income_message = _message(message_id=63)
+    income_message.date = message.date
+    income_parsed = ParsedTransaction("INCOME", 10000000, "RUB", "SALARY", "зарплата", 0.95)
+    db.save_transaction(income_message, income_parsed, "получил зарплату сто тысяч", config)
 
-    bot = SimpleNamespace(photos=[])
+    bot = SimpleNamespace(photos=[], documents=[], messages=[])
 
     def send_photo(chat_id, image, caption):
         bot.photos.append((chat_id, caption, image.read(4)))
 
+    def send_document(chat_id, file, visible_file_name, caption):
+        bot.documents.append((chat_id, visible_file_name, caption, file.read(2)))
+
     bot.send_photo = send_photo
+    bot.send_document = send_document
+    bot.send_message = lambda chat_id, text: bot.messages.append((chat_id, text))
     runner = ScheduledEventRunner(bot, db, config)
     first_day = previous_month.replace(day=1) + timedelta(days=40)
     first_day = first_day.replace(day=1, hour=9, minute=0, second=0, microsecond=0)
@@ -198,6 +251,11 @@ def test_monthly_report_is_sent_once_on_first_day(tmp_path):
     runner._process_monthly_reports(first_day.astimezone(timezone.utc))
     runner._process_monthly_reports(first_day.astimezone(timezone.utc))
 
-    assert len(bot.photos) == 1
+    assert len(bot.photos) == 2
     assert bot.photos[0][0] == 1
     assert "Автоматический отчет" in bot.photos[0][1]
+    assert bot.photos[1][0] == 1
+    assert "Автоматический отчет" in bot.photos[1][1]
+    assert len(bot.documents) == 1
+    assert bot.documents[0][0] == 1
+    assert bot.documents[0][1].endswith(".csv.gz")

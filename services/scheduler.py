@@ -8,7 +8,12 @@ from zoneinfo import ZoneInfo
 from categories import CURRENCY_SYMBOLS
 from database import add_recurrence
 from schemas import ParsedTransaction
-from services.reports import build_previous_month_expense_chart, previous_month_period
+from services.reports import (
+    build_previous_month_expense_chart,
+    build_previous_month_income_chart,
+    export_transactions_csv_gz,
+    previous_month_period,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,20 +102,42 @@ class ScheduledEventRunner:
         for target in self.db.list_previous_month_report_targets(start_utc, end_utc):
             user_id = target["telegram_user_id"]
             chat_id = target["telegram_chat_id"]
-            if self.db.report_delivery_exists(user_id, "monthly_expense_chart", period_key):
+            if self.db.report_delivery_exists(user_id, "monthly_report_bundle", period_key):
                 continue
-            path = None
+            paths = []
             try:
-                path, caption = build_previous_month_expense_chart(self.db, user_id, self.config.app_timezone, self.config.temp_audio_dir / "reports")
-                if not path:
-                    continue
-                with open(path, "rb") as image:
-                    self.bot.send_photo(chat_id, image, caption=f"Автоматический отчет за прошлый месяц\n\n{caption}")
-                self.db.record_report_delivery(user_id, chat_id, "monthly_expense_chart", period_key)
+                report_dir = self.config.temp_audio_dir / "reports"
+                for builder in (build_previous_month_expense_chart, build_previous_month_income_chart):
+                    chart_path, caption = builder(self.db, user_id, self.config.app_timezone, report_dir)
+                    if chart_path:
+                        paths.append(chart_path)
+                        with open(chart_path, "rb") as image:
+                            self.bot.send_photo(chat_id, image, caption=f"Автоматический отчет за прошлый месяц\n\n{caption}")
+                    else:
+                        self.bot.send_message(chat_id, f"Автоматический отчет за прошлый месяц\n\n{caption}")
+
+                csv_path = export_transactions_csv_gz(
+                    self.db,
+                    user_id,
+                    self.config.app_timezone,
+                    report_dir,
+                    start_local,
+                    end_local,
+                    f"monthly-{period_key}",
+                )
+                paths.append(csv_path)
+                with open(csv_path, "rb") as file:
+                    self.bot.send_document(
+                        chat_id,
+                        file,
+                        visible_file_name=csv_path.name,
+                        caption=f"CSV-выгрузка всех записей за {start_local:%m.%Y}.",
+                    )
+                self.db.record_report_delivery(user_id, chat_id, "monthly_report_bundle", period_key)
             except Exception:
-                logger.exception("Monthly expense report failed user_id=%s period=%s", user_id, period_key)
+                logger.exception("Monthly report bundle failed user_id=%s period=%s", user_id, period_key)
             finally:
-                if path:
+                for path in paths:
                     path.unlink(missing_ok=True)
 
 

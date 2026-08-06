@@ -14,7 +14,7 @@ from database import Database
 from handlers.voice_transaction_handler import VoiceTransactionHandler
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.groq_transcriber import FallbackTranscriber, GroqTranscriber
-from services.reports import build_last_30_days_expense_chart, export_transactions_csv_gz
+from services.reports import build_last_30_days_expense_chart, build_last_30_days_income_chart
 from services.scheduler import ScheduledEventRunner, calendar_text
 from welcome import COMMANDS, categories_text, commands_text, welcome_text
 
@@ -71,27 +71,6 @@ def build_bot(config: Config):
         if not _is_allowed_message(config, message):
             return
         bot.reply_to(message, calendar_text(db, message.from_user.id, config.app_timezone))
-
-    @bot.message_handler(commands=["export"])
-    def export(message):
-        if not _is_allowed_message(config, message):
-            return
-        path = None
-        try:
-            path = export_transactions_csv_gz(db, message.from_user.id, config.app_timezone, config.temp_audio_dir / "reports")
-            with open(path, "rb") as file:
-                bot.send_document(
-                    message.chat.id,
-                    file,
-                    visible_file_name=path.name,
-                    caption="Полная выгрузка ваших транзакций за последние 6 месяцев.",
-                )
-        except Exception:
-            logging.getLogger(__name__).exception("Could not export user transactions user_id=%s", message.from_user.id)
-            bot.reply_to(message, "⚠️ Не удалось подготовить CSV-выгрузку.")
-        finally:
-            if path:
-                path.unlink(missing_ok=True)
 
     @bot.message_handler(commands=["report"])
     def report(message):
@@ -292,19 +271,21 @@ def _handle_menu_text(bot, db: Database, config: Config, message, category_state
 
 
 def _send_last_30_days_report(bot, db: Database, config: Config, chat_id: int, telegram_user_id: int) -> None:
-    path = None
+    paths = []
     try:
-        path, caption = build_last_30_days_expense_chart(db, telegram_user_id, config.app_timezone, config.temp_audio_dir / "reports")
-        if not path:
-            bot.send_message(chat_id, caption)
-            return
-        with open(path, "rb") as image:
-            bot.send_photo(chat_id, image, caption=caption)
+        for builder in (build_last_30_days_expense_chart, build_last_30_days_income_chart):
+            path, caption = builder(db, telegram_user_id, config.app_timezone, config.temp_audio_dir / "reports")
+            if not path:
+                bot.send_message(chat_id, caption)
+                continue
+            paths.append(path)
+            with open(path, "rb") as image:
+                bot.send_photo(chat_id, image, caption=caption)
     except Exception:
         logging.getLogger(__name__).exception("Could not build last 30 days report user_id=%s", telegram_user_id)
         bot.send_message(chat_id, "⚠️ Не удалось подготовить графический отчет.")
     finally:
-        if path:
+        for path in paths:
             path.unlink(missing_ok=True)
 
 

@@ -15,17 +15,23 @@ from matplotlib import pyplot as plt
 from categories import CURRENCY_SYMBOLS
 
 
-def export_transactions_csv_gz(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> Path:
+def export_transactions_csv_gz(
+    db,
+    telegram_user_id: int,
+    app_timezone: str,
+    output_dir: Path,
+    start_local: datetime,
+    end_local: datetime,
+    filename_suffix: str,
+) -> Path:
     tz = ZoneInfo(app_timezone)
-    now_local = datetime.now(tz)
-    start_local = _add_months(now_local, -6)
     start_utc = start_local.astimezone(timezone.utc)
-    end_utc = now_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
     rows = db.list_transactions_for_user(telegram_user_id, start_utc, end_utc)
     category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"transactions-{telegram_user_id}-last-6-months.csv.gz"
+    path = output_dir / f"transactions-{telegram_user_id}-{filename_suffix}.csv.gz"
     with gzip.open(path, "wt", encoding="utf-8-sig", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(
@@ -88,11 +94,12 @@ def build_previous_month_expense_chart(db, telegram_user_id: int, app_timezone: 
     start_local, end_local = _previous_month_range(datetime.now(tz))
     period = start_local.strftime("%m.%Y")
     filename_suffix = start_local.strftime("%Y-%m")
-    return build_expense_chart(
+    return build_category_chart(
         db=db,
         telegram_user_id=telegram_user_id,
         app_timezone=app_timezone,
         output_dir=output_dir,
+        transaction_type="EXPENSE",
         start_local=start_local,
         end_local=end_local,
         period_title=period,
@@ -102,16 +109,37 @@ def build_previous_month_expense_chart(db, telegram_user_id: int, app_timezone: 
     )
 
 
+def build_previous_month_income_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    start_local, end_local = _previous_month_range(datetime.now(tz))
+    period = start_local.strftime("%m.%Y")
+    filename_suffix = start_local.strftime("%Y-%m")
+    return build_category_chart(
+        db=db,
+        telegram_user_id=telegram_user_id,
+        app_timezone=app_timezone,
+        output_dir=output_dir,
+        transaction_type="INCOME",
+        start_local=start_local,
+        end_local=end_local,
+        period_title=period,
+        empty_text=f"За прошлый календарный месяц ({period}) доходов не найдено.",
+        caption=f"Доходы по категориям за {period}",
+        filename_suffix=filename_suffix,
+    )
+
+
 def build_last_30_days_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
     tz = ZoneInfo(app_timezone)
     end_local = datetime.now(tz)
     start_local = end_local - timedelta(days=30)
     period = f"{start_local:%d.%m.%Y} - {end_local:%d.%m.%Y}"
-    return build_expense_chart(
+    return build_category_chart(
         db=db,
         telegram_user_id=telegram_user_id,
         app_timezone=app_timezone,
         output_dir=output_dir,
+        transaction_type="EXPENSE",
         start_local=start_local,
         end_local=end_local,
         period_title="последние 30 дней",
@@ -121,11 +149,32 @@ def build_last_30_days_expense_chart(db, telegram_user_id: int, app_timezone: st
     )
 
 
-def build_expense_chart(
+def build_last_30_days_income_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=30)
+    period = f"{start_local:%d.%m.%Y} - {end_local:%d.%m.%Y}"
+    return build_category_chart(
+        db=db,
+        telegram_user_id=telegram_user_id,
+        app_timezone=app_timezone,
+        output_dir=output_dir,
+        transaction_type="INCOME",
+        start_local=start_local,
+        end_local=end_local,
+        period_title="последние 30 дней",
+        empty_text="За последние 30 дней доходов не найдено.",
+        caption=f"Доходы по категориям за 30 дней ({period})",
+        filename_suffix=f"last-30-days-{end_local:%Y-%m-%d}",
+    )
+
+
+def build_category_chart(
     db,
     telegram_user_id: int,
     app_timezone: str,
     output_dir: Path,
+    transaction_type: str,
     start_local: datetime,
     end_local: datetime,
     period_title: str,
@@ -139,18 +188,20 @@ def build_expense_chart(
     totals: dict[tuple[str, str], int] = defaultdict(int)
     currency = "RUB"
     for row in rows:
-        if row.transaction_type != "EXPENSE":
+        if row.transaction_type != transaction_type:
             continue
         currency = row.currency
-        title = category_catalog.get("EXPENSE", {}).get(row.category, row.category)
+        title = category_catalog.get(transaction_type, {}).get(row.category, row.category)
         totals[(row.category, title)] += row.amount_minor
 
     if not totals:
         return None, empty_text
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"expenses-{telegram_user_id}-{filename_suffix}.png"
-    _render_pie_chart(path, totals, currency, period_title)
+    prefix = "expenses" if transaction_type == "EXPENSE" else "income"
+    title = "Расходы" if transaction_type == "EXPENSE" else "Доходы"
+    path = output_dir / f"{prefix}-{telegram_user_id}-{filename_suffix}.png"
+    _render_pie_chart(path, totals, currency, period_title, title)
     return path, caption
 
 
@@ -161,7 +212,7 @@ def previous_month_period(app_timezone: str, now_local: datetime | None = None) 
     return start_local, end_local, start_local.strftime("%Y-%m")
 
 
-def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: str, period: str) -> None:
+def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: str, period: str, title: str) -> None:
     sorted_items = sorted(totals.items(), key=lambda item: item[1], reverse=True)
     labels = [title for (_code, title), _amount in sorted_items]
     values = [amount / 100 for _key, amount in sorted_items]
@@ -185,7 +236,7 @@ def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: 
         text.set_fontsize(9)
         text.set_color("#222222")
     ax.legend(wedges, labels, title="Категории", loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
-    ax.set_title(f"Расходы за {period}\nИтого: {_format_money(total, symbol)}", fontsize=15, pad=18)
+    ax.set_title(f"{title} за {period}\nИтого: {_format_money(total, symbol)}", fontsize=15, pad=18)
     ax.axis("equal")
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
