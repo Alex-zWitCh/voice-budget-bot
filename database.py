@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from categories import CATEGORY_BY_TYPE
+
+INVITE_CODE_TTL = timedelta(hours=24)
 
 
 class Base(DeclarativeBase):
@@ -59,6 +62,34 @@ class Transaction(Base):
     deepseek_model: Mapped[str] = mapped_column(String(64))
     deepseek_confidence: Mapped[float] = mapped_column(Numeric(4, 3))
     processing_version: Mapped[str] = mapped_column(String(32))
+    scope: Mapped[str] = mapped_column(String(16), default="personal", index=True)
+    family_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    paid_by: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+
+
+class Family(Base):
+    __tablename__ = "families"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    owner_telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    invite_code: Mapped[Optional[str]] = mapped_column(String(32), unique=True)
+    invite_code_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class FamilyMember(Base):
+    __tablename__ = "family_members"
+    __table_args__ = (
+        UniqueConstraint("family_id", "telegram_user_id", name="uq_family_members_family_user"),
+        UniqueConstraint("telegram_user_id", name="uq_family_members_one_family_per_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    family_id: Mapped[int] = mapped_column(Integer, index=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    role: Mapped[str] = mapped_column(String(16), default="member")
+    joined_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class ScheduledEvent(Base):
@@ -87,6 +118,8 @@ class ScheduledEvent(Base):
     processing_version: Mapped[str] = mapped_column(String(32))
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_fired_at_utc: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    scope: Mapped[str] = mapped_column(String(16), default="personal", index=True)
+    family_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
 
 
 class ProcessingEvent(Base):
@@ -136,7 +169,35 @@ class Database:
             pool_pre_ping=True,
         )
         Base.metadata.create_all(self.engine)
+        self._run_schema_migrations()
+        self._backfill_legacy_rows()
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
+
+    def _run_schema_migrations(self) -> None:
+        with self.engine.begin() as connection:
+            migrations = {
+                "transactions": {
+                    "scope": "VARCHAR(16) NOT NULL DEFAULT 'personal'",
+                    "family_id": "INTEGER",
+                    "paid_by": "BIGINT",
+                },
+                "scheduled_events": {
+                    "scope": "VARCHAR(16) NOT NULL DEFAULT 'personal'",
+                    "family_id": "INTEGER",
+                },
+            }
+            for table, columns in migrations.items():
+                existing = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+                for column, definition in columns.items():
+                    if column in existing:
+                        continue
+                    connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _backfill_legacy_rows(self) -> None:
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE transactions SET paid_by = telegram_user_id WHERE paid_by IS NULL"
+            )
 
     def upsert_user_and_chat(self, message) -> None:
         now = datetime.now(timezone.utc)
@@ -201,6 +262,9 @@ class Database:
         message_date_utc: datetime,
         voice_duration_sec: int,
         config,
+        scope: str = "personal",
+        family_id: Optional[int] = None,
+        paid_by: Optional[int] = None,
     ) -> Optional[int]:
         tx = Transaction(
             telegram_chat_id=telegram_chat_id,
@@ -218,6 +282,9 @@ class Database:
             deepseek_model=config.deepseek_model,
             deepseek_confidence=parsed.confidence,
             processing_version=config.processing_version,
+            scope=scope,
+            family_id=family_id,
+            paid_by=paid_by or telegram_user_id,
         )
         try:
             with self.Session.begin() as session:
@@ -477,6 +544,99 @@ class Database:
         except IntegrityError:
             return False
         return True
+
+    # ---- Families ----
+
+    def create_family(self, name: str, owner_telegram_user_id: int) -> Optional[int]:
+        with self.Session.begin() as session:
+            existing = session.query(FamilyMember).filter_by(telegram_user_id=owner_telegram_user_id).first()
+            if existing:
+                return None
+            family = Family(name=name, owner_telegram_user_id=owner_telegram_user_id)
+            session.add(family)
+            session.flush()
+            session.add(
+                FamilyMember(
+                    family_id=family.id,
+                    telegram_user_id=owner_telegram_user_id,
+                    role="owner",
+                    joined_at_utc=datetime.now(timezone.utc),
+                )
+            )
+            return family.id
+
+    def get_family_for_user(self, telegram_user_id: int) -> Optional[Family]:
+        with self.Session() as session:
+            member = session.query(FamilyMember).filter_by(telegram_user_id=telegram_user_id).first()
+            if not member:
+                return None
+            return session.query(Family).filter_by(id=member.family_id).first()
+
+    def generate_invite_code(self, telegram_user_id: int) -> Optional[str]:
+        family = self.get_family_for_user(telegram_user_id)
+        if not family:
+            return None
+        code = _invite_code()
+        with self.Session.begin() as session:
+            row = session.query(Family).filter_by(id=family.id).first()
+            row.invite_code = code
+            row.invite_code_expires_at = datetime.now(timezone.utc) + INVITE_CODE_TTL
+        return code
+
+    def join_family_by_code(self, telegram_user_id: int, code: str) -> tuple[bool, str]:
+        code = code.strip().upper()
+        with self.Session.begin() as session:
+            family = session.query(Family).filter_by(invite_code=code).first()
+            if not family:
+                return False, "invite_code_not_found"
+            expires_at = family.invite_code_expires_at
+            if expires_at and _as_utc(expires_at) < datetime.now(timezone.utc):
+                return False, "invite_code_expired"
+            existing = session.query(FamilyMember).filter_by(telegram_user_id=telegram_user_id).first()
+            if existing:
+                return False, "already_in_family"
+            session.add(
+                FamilyMember(
+                    family_id=family.id,
+                    telegram_user_id=telegram_user_id,
+                    role="member",
+                    joined_at_utc=datetime.now(timezone.utc),
+                )
+            )
+            return True, family.name
+
+    def list_family_members(self, family_id: int) -> list[FamilyMember]:
+        with self.Session() as session:
+            return (
+                session.query(FamilyMember)
+                .filter_by(family_id=family_id)
+                .order_by(FamilyMember.joined_at_utc.asc())
+                .all()
+            )
+
+    def set_transaction_scope(
+        self,
+        transaction_id: int,
+        telegram_user_id: int,
+        scope: str,
+        family_id: Optional[int] = None,
+        paid_by: Optional[int] = None,
+    ) -> bool:
+        with self.Session.begin() as session:
+            tx = session.query(Transaction).filter_by(id=transaction_id).first()
+            if not tx:
+                return False
+            if tx.telegram_user_id != telegram_user_id:
+                return False
+            tx.scope = scope
+            tx.family_id = family_id if scope == "family" else None
+            tx.paid_by = paid_by or telegram_user_id
+            return True
+
+
+def _invite_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(8))
 
 
 def _category_code(title: str) -> str:

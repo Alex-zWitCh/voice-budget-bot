@@ -5,6 +5,14 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Family layer: `families` and `family_members` tables, `/family` (create/status),
+  `/family create <name>`, `/family invite` (invite code), `/join <code>`.
+- Transaction scope: `scope = personal | family`, `family_id`, `paid_by` columns on
+  `transactions` and `scheduled_events`. Inline buttons `Семейное` / `Личное` after
+  saving a transaction let the author switch scope.
+- Transparent schema migration: `_run_schema_migrations` (idempotent `ALTER TABLE`
+  for existing DBs) and `_backfill_legacy_rows` (`paid_by = author` for existing rows).
+  Existing data is preserved and defaults to `personal` scope.
 - Primary STT is now the local OpenAI-compatible gateway (`STT_BASE_URL`, default `https://stt.example.com:7443/v1`, model `Systran/faster-whisper-large-v3`).
 - Groq became an optional fallback STT channel (`GROQ_FALLBACK_ENABLED`), used when the primary STT fails or returns an empty transcript.
 - Added direct text input for transactions, reminders, and deferred expenses through the same parser path as voice transcripts.

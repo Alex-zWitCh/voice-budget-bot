@@ -140,7 +140,11 @@ class VoiceTransactionHandler:
         status = f"saved_{parsed.transaction_type.lower()}" if transaction_id else "duplicate"
         self.db.record_event(message, status, duration_ms=int((time.monotonic() - started) * 1000))
         if transaction_id:
-            self.bot.reply_to(message, self._success_text(message, parsed, category_catalog), reply_markup=_delete_keyboard(transaction_id))
+            self.bot.reply_to(
+                message,
+                self._success_text(message, parsed, category_catalog),
+                reply_markup=_success_keyboard(transaction_id, self.db.get_family_for_user(message.from_user.id) is not None),
+            )
         return payload
 
     def _already_processed(self, message) -> bool:
@@ -215,6 +219,19 @@ def _format_amount(amount_minor: int, currency: str) -> str:
     if minor:
         amount = f"{amount},{minor:02d}"
     return f"{amount} {CURRENCY_SYMBOLS.get(currency, currency)}"
+
+
+def _success_keyboard(transaction_id: int, has_family: bool):
+    from telebot import types
+
+    keyboard = types.InlineKeyboardMarkup()
+    if has_family:
+        keyboard.add(
+            types.InlineKeyboardButton("Семейное", callback_data=f"scope_tx:{transaction_id}:family"),
+            types.InlineKeyboardButton("Личное", callback_data=f"scope_tx:{transaction_id}:personal"),
+        )
+    keyboard.add(types.InlineKeyboardButton("Удалить запись", callback_data=f"delete_tx:{transaction_id}"))
+    return keyboard
 
 
 def _delete_keyboard(transaction_id: int):

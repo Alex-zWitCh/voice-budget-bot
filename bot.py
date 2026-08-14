@@ -85,6 +85,51 @@ def build_bot(config: Config):
             return
         _send_last_30_days_report(bot, db, config, message.chat.id, message.from_user.id)
 
+    @bot.message_handler(commands=["family"])
+    def family(message):
+        if not _is_allowed_message(config, message):
+            return
+        parts = (message.text or "").split(maxsplit=2)
+        action = parts[1].lower() if len(parts) > 1 else ""
+        if action == "create":
+            name = " ".join(parts[2:]).strip() if len(parts) > 2 else ""
+            if not name:
+                bot.reply_to(message, "Использование: /family create <имя семьи>")
+                return
+            family_id = db.create_family(name[:255], message.from_user.id)
+            if family_id:
+                bot.reply_to(message, f"👨‍👩‍👧 Семья «{name[:255]}» создана.\n\nПригласите партнёра: /family invite")
+            else:
+                bot.reply_to(message, "Вы уже состоите в семье.")
+            return
+        if action == "invite":
+            code = db.generate_invite_code(message.from_user.id)
+            if not code:
+                bot.reply_to(message, "У вас пока нет семьи. Создайте её: /family create <имя семьи>")
+                return
+            bot.reply_to(message, f"🔑 Код приглашения: `{code}`\n\nПередайте его партнёру. Он введёт: /join {code}", parse_mode="Markdown")
+            return
+        _send_family_status(bot, db, message.from_user.id)
+
+    @bot.message_handler(commands=["join"])
+    def join(message):
+        if not _is_allowed_message(config, message):
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            bot.reply_to(message, "Использование: /join <код приглашения>")
+            return
+        ok, family_name = db.join_family_by_code(message.from_user.id, parts[1])
+        if ok:
+            bot.reply_to(message, f"👨‍👩‍👧 Вы присоединились к семье «{family_name}».")
+        else:
+            messages = {
+                "invite_code_not_found": "Код приглашения не найден. Проверьте код.",
+                "invite_code_expired": "Код приглашения истёк. Попросите новый: /family invite",
+                "already_in_family": "Вы уже состоите в семье.",
+            }
+            bot.reply_to(message, messages.get(family_name, "Не удалось вступить в семью."))
+
     @bot.callback_query_handler(func=lambda call: call.data == "show_categories")
     def show_categories(call):
         if not _is_allowed_call(config, call):
@@ -152,6 +197,28 @@ def build_bot(config: Config):
         if deleted:
             bot.edit_message_text("Запись удалена.", call.message.chat.id, call.message.message_id)
 
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("scope_tx:"))
+    def scope_transaction(call):
+        if not _is_allowed_call(config, call):
+            bot.answer_callback_query(call.id)
+            return
+        _, transaction_id, scope = call.data.split(":", 2)
+        transaction_id = int(transaction_id)
+        family_id = None
+        if scope == "family":
+            family = db.get_family_for_user(call.from_user.id)
+            if not family:
+                bot.answer_callback_query(call.id, "У вас пока нет семьи. Создайте её: /family create")
+                return
+            family_id = family.id
+        updated = db.set_transaction_scope(transaction_id, call.from_user.id, scope, family_id)
+        if not updated:
+            bot.answer_callback_query(call.id, "Не удалось изменить")
+            return
+        bot.answer_callback_query(call.id)
+        label = "семейное" if scope == "family" else "личное"
+        bot.edit_message_text(f"{call.message.text}\n\n🏷️ Отмечено как {label}.", call.message.chat.id, call.message.message_id)
+
     @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_event:"))
     def delete_scheduled_event(call):
         if not _is_allowed_call(config, call):
@@ -192,6 +259,24 @@ def build_bot(config: Config):
             )
 
     return bot, scheduler
+
+
+def _send_family_status(bot, db: Database, telegram_user_id: int) -> None:
+    family = db.get_family_for_user(telegram_user_id)
+    if not family:
+        bot.send_message(
+            telegram_user_id,
+            "👨‍👩‍👧 У вас пока нет семьи.\n\nСоздайте её:\n`/family create <имя семьи>`\n\nЗатем пригласите партнёра:\n`/family invite`",
+            parse_mode="Markdown",
+        )
+        return
+    members = db.list_family_members(family.id)
+    lines = [f"👨‍👩‍👧 {family.name}", ""]
+    for member in members:
+        role = "👑 владелец" if member.role == "owner" else "👤 участник"
+        lines.append(f"{role} · {member.telegram_user_id}")
+    lines.extend(["", "Сменить приглашение: /family invite"])
+    bot.send_message(telegram_user_id, "\n".join(lines))
 
 
 def _category_menu_keyboard():

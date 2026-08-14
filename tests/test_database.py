@@ -1,8 +1,11 @@
 import csv
 import gzip
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+
+from sqlalchemy import text
 
 from database import Database
 from schemas import ParsedScheduledEvent, ParsedTransaction
@@ -259,3 +262,172 @@ def test_monthly_report_is_sent_once_on_first_day(tmp_path):
     assert len(bot.documents) == 1
     assert bot.documents[0][0] == 1
     assert bot.documents[0][1].endswith(".csv.gz")
+
+
+def _create_legacy_db(path):
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            telegram_user_id BIGINT UNIQUE,
+            username VARCHAR(255),
+            first_name VARCHAR(255),
+            last_name VARCHAR(255),
+            first_seen_at DATETIME,
+            last_seen_at DATETIME
+        );
+        CREATE TABLE chats (
+            id INTEGER PRIMARY KEY,
+            telegram_chat_id BIGINT UNIQUE,
+            chat_type VARCHAR(32),
+            title VARCHAR(255),
+            is_enabled BOOLEAN,
+            created_at DATETIME
+        );
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY,
+            telegram_chat_id BIGINT,
+            telegram_message_id BIGINT,
+            telegram_user_id BIGINT,
+            transaction_type VARCHAR(16),
+            amount_minor BIGINT,
+            currency VARCHAR(3),
+            category VARCHAR(64),
+            description TEXT,
+            transcript TEXT,
+            message_date_utc DATETIME,
+            created_at_utc DATETIME,
+            voice_duration_sec INTEGER,
+            groq_model VARCHAR(64),
+            deepseek_model VARCHAR(64),
+            deepseek_confidence NUMERIC,
+            processing_version VARCHAR(32),
+            UNIQUE(telegram_chat_id, telegram_message_id)
+        );
+        CREATE TABLE scheduled_events (
+            id INTEGER PRIMARY KEY,
+            telegram_chat_id BIGINT,
+            telegram_message_id BIGINT,
+            telegram_user_id BIGINT,
+            event_type VARCHAR(32),
+            status VARCHAR(32),
+            notify_at_utc DATETIME,
+            event_at_utc DATETIME,
+            recurrence VARCHAR(16),
+            title TEXT,
+            transcript TEXT,
+            transaction_type VARCHAR(16),
+            amount_minor BIGINT,
+            currency VARCHAR(3),
+            category VARCHAR(64),
+            description TEXT,
+            groq_model VARCHAR(64),
+            deepseek_model VARCHAR(64),
+            deepseek_confidence NUMERIC,
+            processing_version VARCHAR(32),
+            created_at_utc DATETIME,
+            last_fired_at_utc DATETIME,
+            UNIQUE(telegram_chat_id, telegram_message_id)
+        );
+        INSERT INTO users (telegram_user_id, first_name) VALUES (20, 'Alex');
+        INSERT INTO chats (telegram_chat_id, chat_type) VALUES (1, 'private');
+        INSERT INTO transactions (
+            telegram_chat_id, telegram_message_id, telegram_user_id, transaction_type,
+            amount_minor, currency, category, description, transcript, message_date_utc,
+            voice_duration_sec, groq_model, deepseek_model, deepseek_confidence, processing_version
+        ) VALUES (1, 10, 20, 'EXPENSE', 50000, 'RUB', 'PRODUCTS', 'молоко', 'пятьсот продукты молоко',
+                  '2026-07-21 10:00:00', 3, 'whisper', 'deepseek', 0.95, '1.0');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_schema_migration_preserves_legacy_data_and_adds_columns(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    _create_legacy_db(path)
+    db = Database(path)
+
+    with db.Session() as session:
+        rows = session.execute(text("SELECT * FROM transactions")).fetchall()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.scope == "personal"
+    assert row.family_id is None
+    assert row.paid_by == 20
+
+    cols = {row[1] for row in __import__("sqlite3").connect(path).execute("PRAGMA table_info(transactions)")}
+    assert {"scope", "family_id", "paid_by"} <= cols
+    event_cols = {row[1] for row in __import__("sqlite3").connect(path).execute("PRAGMA table_info(scheduled_events)")}
+    assert {"scope", "family_id"} <= event_cols
+
+
+def test_schema_migration_is_idempotent(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    _create_legacy_db(path)
+    Database(path)
+    Database(path)
+
+
+def test_create_family_and_invite_and_join(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    family_id = db.create_family("Наша семья", 20)
+    assert family_id is not None
+    assert db.create_family("Другая", 20) is None
+
+    family = db.get_family_for_user(20)
+    assert family is not None
+    assert family.name == "Наша семья"
+
+    code = db.generate_invite_code(20)
+    assert code
+
+    ok, name = db.join_family_by_code(30, code)
+    assert ok is True
+    assert name == "Наша семья"
+
+    ok, reason = db.join_family_by_code(40, "WRONG123")
+    assert ok is False
+    assert reason == "invite_code_not_found"
+
+    ok, reason = db.join_family_by_code(30, code)
+    assert ok is False
+    assert reason == "already_in_family"
+
+    members = db.list_family_members(family_id)
+    assert {m.telegram_user_id for m in members} == {20, 30}
+
+
+def test_join_without_family_returns_not_found(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    ok, reason = db.join_family_by_code(20, "ABC12345")
+    assert ok is False
+    assert reason == "invite_code_not_found"
+
+
+def test_set_transaction_scope(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    message = _message()
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    parsed = ParsedTransaction("EXPENSE", 50000, "RUB", "PRODUCTS", "молоко", 0.95)
+    db.upsert_user_and_chat(message)
+    transaction_id = db.save_transaction(message, parsed, "пятьсот продукты молоко", config)
+    assert transaction_id
+
+    family_id = db.create_family("Наша семья", 20)
+
+    assert db.set_transaction_scope(transaction_id, 20, "family", family_id) is True
+    with db.Session() as session:
+        row = session.execute(text("SELECT scope, family_id, paid_by FROM transactions WHERE id=:id"), {"id": transaction_id}).fetchone()
+    assert row.scope == "family"
+    assert row.family_id == family_id
+    assert row.paid_by == 20
+
+    assert db.set_transaction_scope(transaction_id, 20, "personal") is True
+    with db.Session() as session:
+        row = session.execute(text("SELECT scope, family_id FROM transactions WHERE id=:id"), {"id": transaction_id}).fetchone()
+    assert row.scope == "personal"
+    assert row.family_id is None
+
+    assert db.set_transaction_scope(transaction_id, 999, "family", family_id) is False

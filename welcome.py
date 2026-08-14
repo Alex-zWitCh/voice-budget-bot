@@ -9,6 +9,13 @@ COMMANDS = [
     ("/calendar", "календарь будущих событий на 2 месяца"),
     ("/categories", "категории и управление своими категориями"),
     ("/report", "графические отчеты расходов и доходов за последние 30 дней"),
+    ("/family", "статус семьи, создание и приглашение"),
+    ("/join", "вступить в семью по коду"),
+]
+
+COMMANDS_EXTRA = [
+    ("/family create <имя>", "создать семью"),
+    ("/family invite", "показать код приглашения"),
 ]
 
 
@@ -26,6 +33,7 @@ def welcome_text(config) -> str:
         "",
         "Команды:",
         *[f"• {command} — {description}" for command, description in COMMANDS],
+        *[f"• {command} — {description}" for command, description in COMMANDS_EXTRA],
     ]
     if config.welcome_footer:
         lines.extend(["", config.welcome_footer])
@@ -34,7 +42,9 @@ def welcome_text(config) -> str:
 
 
 def commands_text() -> str:
-    return "Доступные команды:\n" + "\n".join(f"• {command} — {description}" for command, description in COMMANDS)
+    lines = [f"• {command} — {description}" for command, description in COMMANDS]
+    lines.extend(f"• {command} — {description}" for command, description in COMMANDS_EXTRA)
+    return "Доступные команды:\n" + "\n".join(lines)
 
 
 def categories_text() -> str:
