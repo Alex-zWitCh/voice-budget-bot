@@ -5,7 +5,8 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Added optional OpenAI-compatible fallback STT provider when Groq transcription fails.
+- Primary STT is now the local OpenAI-compatible gateway (`STT_BASE_URL`, default `https://stt.example.com:7443/v1`, model `Systran/faster-whisper-large-v3`).
+- Groq became an optional fallback STT channel (`GROQ_FALLBACK_ENABLED`), used when the primary STT fails or returns an empty transcript.
 - Added direct text input for transactions, reminders, and deferred expenses through the same parser path as voice transcripts.
 - Added `/report` and a Telegram menu button for last-30-days expense and income pie charts.
 - Added automatic previous-calendar-month report bundle delivery on the 1st day of each month: expense chart, income chart, and CSV.gz with all records for the period.

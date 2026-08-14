@@ -1,6 +1,6 @@
 import pytest
 
-from services.groq_transcriber import FallbackTranscriber, TranscriptionError
+from services.stt_transcriber import FallbackTranscriber, TranscriptionError
 
 
 class _FakeTranscriber:

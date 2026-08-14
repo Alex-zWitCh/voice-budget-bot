@@ -9,7 +9,7 @@ from categories import CURRENCY_SYMBOLS, category_title
 from schemas import ParsedScheduledEvent, ValidationError, validate_voice_intent
 from services.audio_converter import AudioConversionError, normalize_voice
 from services.deepseek_transaction_parser import DeepSeekParserError
-from services.groq_transcriber import TranscriptionError
+from services.stt_transcriber import TranscriptionError
 
 logger = logging.getLogger(__name__)
 

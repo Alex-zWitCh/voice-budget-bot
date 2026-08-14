@@ -36,7 +36,7 @@ def _previous_month_datetime(app_timezone="Europe/Moscow"):
 def test_save_transaction_is_idempotent(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     message = _message()
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     parsed = ParsedTransaction("EXPENSE", 50000, "RUB", "PRODUCTS", "молоко", 0.95)
 
     db.upsert_user_and_chat(message)
@@ -65,7 +65,7 @@ def test_scheduled_events_calendar_and_deferred_expense(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     message = _message()
     config = SimpleNamespace(
-        groq_stt_model="whisper-large-v3",
+        stt_model="whisper-large-v3",
         deepseek_model="deepseek-v4-flash",
         processing_version="1.0",
         app_timezone="Europe/Moscow",
@@ -100,7 +100,7 @@ def test_delete_scheduled_event(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     message = _message()
     config = SimpleNamespace(
-        groq_stt_model="whisper-large-v3",
+        stt_model="whisper-large-v3",
         deepseek_model="deepseek-v4-flash",
         processing_version="1.0",
         app_timezone="Europe/Moscow",
@@ -121,7 +121,7 @@ def test_delete_scheduled_event(tmp_path):
 
 def test_export_transactions_csv_gz_contains_full_transcript(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _message(message_id=50)
     message.date = int(datetime.now(timezone.utc).timestamp())
     parsed = ParsedTransaction("EXPENSE", 99800, "RUB", "ALCOHOL", "пиво с закусками", 0.95)
@@ -144,7 +144,7 @@ def test_export_transactions_csv_gz_contains_full_transcript(tmp_path):
 
 def test_previous_month_expense_chart_is_created(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _message(message_id=60)
     message.date = int(_previous_month_datetime().astimezone(timezone.utc).timestamp())
     parsed = ParsedTransaction("EXPENSE", 140000, "RUB", "PRODUCTS", "продукты", 0.95)
@@ -162,7 +162,7 @@ def test_previous_month_expense_chart_is_created(tmp_path):
 
 def test_previous_month_income_chart_is_created(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _message(message_id=63)
     message.date = int(_previous_month_datetime().astimezone(timezone.utc).timestamp())
     parsed = ParsedTransaction("INCOME", 10000000, "RUB", "SALARY", "зарплата", 0.95)
@@ -180,7 +180,7 @@ def test_previous_month_income_chart_is_created(tmp_path):
 
 def test_last_30_days_expense_chart_is_created(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _message(message_id=61)
     message.date = int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())
     parsed = ParsedTransaction("EXPENSE", 140000, "RUB", "PRODUCTS", "продукты", 0.95)
@@ -197,7 +197,7 @@ def test_last_30_days_expense_chart_is_created(tmp_path):
 
 def test_last_30_days_income_chart_is_created(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
-    config = SimpleNamespace(groq_stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _message(message_id=64)
     message.date = int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())
     parsed = ParsedTransaction("INCOME", 10000000, "RUB", "SALARY", "зарплата", 0.95)
@@ -215,7 +215,7 @@ def test_last_30_days_income_chart_is_created(tmp_path):
 def test_monthly_report_is_sent_once_on_first_day(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     config = SimpleNamespace(
-        groq_stt_model="whisper-large-v3",
+        stt_model="whisper-large-v3",
         deepseek_model="deepseek-v4-flash",
         processing_version="1.0",
         app_timezone="Europe/Moscow",

@@ -9,10 +9,11 @@ Telegram-бот для быстрого голосового и текстово
 
 Пользователь отправляет короткое голосовое сообщение или обычный текст с одной
 операцией. Для voice бот проверяет длительность, нормализует аудио через FFmpeg
-и распознает речь через Groq Whisper. Затем и голосовая расшифровка, и текстовый
-ввод проходят один путь: DeepSeek извлекает структуру операции, а результат
-сохраняется в локальную SQLite-базу. Приветствие, картинка и подпись
-настраиваются через переменные окружения.
+и распознает речь через локальный OpenAI-compatible STT-шлюз
+(`Systran/faster-whisper-large-v3`, опционально резервный Groq). Затем и голосовая
+расшифровка, и текстовый ввод проходят один путь: DeepSeek извлекает структуру
+операции, а результат сохраняется в локальную SQLite-базу. Приветствие, картинка
+и подпись настраиваются через переменные окружения.
 
 В приветствии всегда показывается ссылка на автора форка:
 <https://github.com/Alex-zWitCh>. Эта ссылка встроена в код и не отключается
@@ -25,14 +26,15 @@ under the MIT License.
 
 The bot is named SmartExpense 2.0 in memory of the repository that inspired this
 fork. The current version contains a substantial redesign focused on private and
-family budget tracking, Groq speech recognition, direct text input,
+family budget tracking, local OpenAI-compatible STT speech recognition with
+optional Groq fallback, direct text input,
 DeepSeek-based income/expense extraction and local storage.
 
 ## MVP Features
 
 - личные чаты и явно разрешенные семейные группы;
 - Telegram voice до 16 секунд и прямой текстовый ввод операций;
-- Groq `whisper-large-v3` для speech-to-text;
+- локальный OpenAI-compatible STT (`Systran/faster-whisper-large-v3` на `https://stt.example.com:7443/v1`) + опциональный резервный Groq `whisper-large-v3`;
 - DeepSeek JSON extraction для `EXPENSE` и `INCOME`;
 - суммы хранятся как integer minor units, без float;
 - SQLite-таблицы `users`, `chats`, `transactions`, `processing_events`;
@@ -147,9 +149,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Alex-zWitCh/voice-budget
 Что понадобится в процессе:
 
 - Telegram bot token — создается через Telegram-бота `@BotFather`;
-- Groq API key — используется для распознавания голосовых сообщений;
+- STT API key — ключ локального OpenAI-compatible шлюза распознавания речи (`https://stt.example.com:7443/v1`);
 - DeepSeek API key — используется для извлечения суммы, типа операции, категории и будущих событий;
-- fallback STT API key — опционально, резервный OpenAI-compatible сервис распознавания речи;
+- Groq API key — опционально, резервный STT-канал (если локальный шлюз недоступен);
 - `ALLOWED_CHAT_IDS` — опционально, список разрешенных чатов через запятую;
 - `ALLOWED_USER_IDS` — опционально, список разрешенных пользователей через запятую.
 
@@ -189,11 +191,10 @@ Copy `.env.example` to `.env` and fill secrets outside Git:
 
 ```dotenv
 BOT_TOKEN=
-GROQ_API_KEY=
+STT_API_KEY=
 DEEPSEEK_API_KEY=
-FALLBACK_STT_ENABLED=false
-FALLBACK_STT_API_KEY=
-FALLBACK_STT_BASE_URL=
+GROQ_FALLBACK_ENABLED=false
+GROQ_API_KEY=
 ALLOWED_CHAT_IDS=
 ALLOWED_USER_IDS=
 ```
@@ -224,11 +225,12 @@ pytest
 
 ## Privacy
 
-Audio is sent to Groq for transcription. If optional fallback STT is enabled
-and Groq returns an error or an empty transcript, the same audio is sent to the
-configured fallback OpenAI-compatible transcription service. Voice transcripts
-and direct text messages are sent to DeepSeek for structured extraction. API
-keys are not written to logs.
+Audio is sent to the primary STT service — a local OpenAI-compatible gateway
+(`https://stt.example.com:7443/v1`, model `Systran/faster-whisper-large-v3`).
+If optional Groq fallback is enabled and the primary STT returns an error or an
+empty transcript, the same audio is sent to Groq. Voice transcripts and direct
+text messages are sent to DeepSeek for structured extraction. API keys are not
+written to logs.
 
 ## Диагностические логи
 

@@ -188,8 +188,9 @@ explain_tokens() {
 
 Нужные токены:
 - Telegram bot token: создается в Telegram через @BotFather командой /newbot.
-- Groq API key: нужен для распознавания голосовых сообщений через Whisper.
+- STT API key: ключ локального OpenAI-compatible шлюза распознавания речи (https://stt.example.com:7443/v1).
 - DeepSeek API key: нужен для превращения распознанной фразы в сумму, тип и категорию.
+- Groq API key: опционально, резервный STT-канал, если локальный шлюз недоступен.
 
 Значения будут сохранены в /opt/voice-budget-bot/.env с правами 600.
 TEXT
@@ -211,10 +212,11 @@ write_env() {
   explain_tokens
   prompt BOT_TOKEN "Telegram bot token" "" 1
   [[ -n "$BOT_TOKEN" ]] || fail "BOT_TOKEN обязателен."
-  prompt GROQ_API_KEY "Groq API key" "" 1
-  [[ -n "$GROQ_API_KEY" ]] || fail "GROQ_API_KEY обязателен."
+  prompt STT_API_KEY "STT API key (локальный шлюз)" "" 1
+  [[ -n "$STT_API_KEY" ]] || fail "STT_API_KEY обязателен."
   prompt DEEPSEEK_API_KEY "DeepSeek API key" "" 1
   [[ -n "$DEEPSEEK_API_KEY" ]] || fail "DEEPSEEK_API_KEY обязателен."
+  prompt GROQ_API_KEY "Groq API key (опционально, резервный STT). Пусто = выключен" "" 0
   prompt ALLOWED_CHAT_IDS "Разрешенные chat_id через запятую. Пусто = личные чаты разрешены, группы игнорируются" "" 0
   prompt ALLOWED_USER_IDS "Разрешенные user_id через запятую. Пусто = без ограничения пользователей" "" 0
   prompt APP_TIMEZONE "Часовой пояс" "Europe/Moscow" 0
@@ -233,6 +235,13 @@ ALLOWED_CHAT_IDS=$ALLOWED_CHAT_IDS
 ALLOWED_USER_IDS=$ALLOWED_USER_IDS
 MAX_VOICE_DURATION_SEC=16
 
+STT_BASE_URL=https://stt.example.com:7443/v1
+STT_API_KEY=$STT_API_KEY
+STT_MODEL=Systran/faster-whisper-large-v3
+STT_TIMEOUT_SEC=120
+STT_VERIFY_SSL=false
+
+GROQ_FALLBACK_ENABLED=$([[ -n "$GROQ_API_KEY" ]] && echo "true" || echo "false")
 GROQ_API_KEY=$GROQ_API_KEY
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 GROQ_STT_MODEL=whisper-large-v3

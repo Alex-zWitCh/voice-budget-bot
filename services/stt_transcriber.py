@@ -11,8 +11,8 @@ class TranscriptionError(Exception):
     pass
 
 
-class GroqTranscriber:
-    def __init__(self, api_key: str, base_url: str, model: str, timeout_sec: int, verify_ssl: bool = True, provider_name: str = "groq"):
+class SttTranscriber:
+    def __init__(self, api_key: str, base_url: str, model: str, timeout_sec: int, verify_ssl: bool = True, provider_name: str = "stt"):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
