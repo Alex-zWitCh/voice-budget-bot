@@ -17,6 +17,8 @@ from services.reports import (
 
 logger = logging.getLogger(__name__)
 
+MONTHLY_REPORT_CATCH_UP_DAYS = 3
+
 
 class ScheduledEventRunner:
     def __init__(self, bot, db, config):
@@ -46,6 +48,7 @@ class ScheduledEventRunner:
         for event in self.db.get_due_scheduled_events(now):
             self._process_event(event, now)
         self._process_monthly_reports(now)
+        self.db.clean_expired_pending()
 
     def _process_event(self, event, now: datetime) -> None:
         if event.event_type == "DEFERRED_EXPENSE":
@@ -94,7 +97,7 @@ class ScheduledEventRunner:
 
     def _process_monthly_reports(self, now_utc: datetime) -> None:
         now_local = now_utc.astimezone(ZoneInfo(self.config.app_timezone))
-        if now_local.day != 1:
+        if now_local.day > MONTHLY_REPORT_CATCH_UP_DAYS:
             return
         start_local, end_local, period_key = previous_month_period(self.config.app_timezone, now_local)
         start_utc = start_local.astimezone(timezone.utc)

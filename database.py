@@ -6,14 +6,32 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine, event, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from categories import CATEGORY_BY_TYPE
-from schemas import ParsedTransaction
+from schemas import ParsedExchange, ParsedTransaction
 
 INVITE_CODE_TTL = timedelta(hours=24)
+PENDING_EXCHANGE_TTL = timedelta(minutes=10)
+
+
+def _make_sqlite_write_serialized(engine) -> None:
+    """Заставляет SQLite начинать каждую транзакцию с BEGIN IMMEDIATE.
+
+    Это снимает RESERVED-лок на запись в момент старта транзакции, а не при первом
+    INSERT. Иначе два параллельных потока могут прочитать одинаковый MAX(...),
+    затем оба записать — отсюда гонка exchange_pair_id (P2-2).
+    """
+
+    @event.listens_for(engine, "connect")
+    def _no_autocommit_switch(dbapi_connection, _connection_record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _begin_immediate(conn):
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
 
 
 class Base(DeclarativeBase):
@@ -166,6 +184,23 @@ class ReportDelivery(Base):
     period_key: Mapped[str] = mapped_column(String(32), index=True)
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    def __repr__(self) -> str:
+        return f"ReportDelivery(user={self.telegram_user_id}, type={self.report_type!r}, period={self.period_key!r})"
+
+
+class PendingExchange(Base):
+    __tablename__ = "pending_exchanges"
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    from_amount_minor: Mapped[int] = mapped_column(BigInteger)
+    from_currency: Mapped[str] = mapped_column(String(3))
+    to_currency: Mapped[str] = mapped_column(String(3))
+    description: Mapped[str] = mapped_column(Text)
+    transcript: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3))
+    chat_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
 
 class Database:
     def __init__(self, sqlite_path: Path):
@@ -175,6 +210,7 @@ class Database:
             connect_args={"check_same_thread": False, "timeout": 10},
             pool_pre_ping=True,
         )
+        _make_sqlite_write_serialized(self.engine)
         Base.metadata.create_all(self.engine)
         self._run_schema_migrations()
         self._backfill_legacy_rows()
@@ -322,6 +358,10 @@ class Database:
 
         Расход в исходной валюте и доход в целевой валюте (категория TRANSFERS)
         связываются через exchange_pair_id и хранят применённый курс.
+
+        Обе записи и выбор exchange_pair_id выполняются в одной IMMEDIATE-транзакции:
+        это исключает гонку, когда два параллельных обработчика получают одинаковый
+        MAX(exchange_pair_id)+1 (P2-2).
         """
         voice = getattr(message, "voice", None)
         message_date_utc = datetime.fromtimestamp(message.date, timezone.utc)
@@ -329,9 +369,6 @@ class Database:
         rate = parsed.rate
         if rate is None:
             return None
-        with self.Session.begin() as session:
-            pair_id = session.execute(text("SELECT COALESCE(MAX(exchange_pair_id), 0) + 1 FROM transactions")).scalar()
-        pair_id = int(pair_id)
 
         expense = ParsedTransaction(
             transaction_type="EXPENSE",
@@ -349,34 +386,57 @@ class Database:
             description=parsed.description,
             confidence=parsed.confidence,
         )
-        expense_id = self.create_transaction(
-            telegram_chat_id=message.chat.id,
-            telegram_message_id=message_id,
-            telegram_user_id=message.from_user.id,
-            parsed=expense,
+        common = dict(
             transcript=transcript,
             message_date_utc=message_date_utc,
             voice_duration_sec=voice.duration if voice else 0,
-            config=config,
+            groq_model=config.stt_model,
+            deepseek_model=config.deepseek_model,
+            deepseek_confidence=parsed.confidence,
+            processing_version=config.processing_version,
+            scope="personal",
+            family_id=None,
+            paid_by=message.from_user.id,
             exchange_rate=rate,
             from_currency=parsed.from_currency,
             from_amount_minor=parsed.from_amount_minor,
-            exchange_pair_id=pair_id,
         )
-        income_id = self.create_transaction(
-            telegram_chat_id=message.chat.id,
-            telegram_message_id=-message_id,
-            telegram_user_id=message.from_user.id,
-            parsed=income,
-            transcript=transcript,
-            message_date_utc=message_date_utc,
-            voice_duration_sec=voice.duration if voice else 0,
-            config=config,
-            exchange_rate=rate,
-            from_currency=parsed.from_currency,
-            from_amount_minor=parsed.from_amount_minor,
-            exchange_pair_id=pair_id,
-        )
+        try:
+            with self.Session.begin() as session:
+                pair_id = session.execute(text("SELECT COALESCE(MAX(exchange_pair_id), 0) + 1 FROM transactions")).scalar()
+                pair_id = int(pair_id)
+                expense_tx = Transaction(
+                    telegram_chat_id=message.chat.id,
+                    telegram_message_id=message_id,
+                    telegram_user_id=message.from_user.id,
+                    transaction_type="EXPENSE",
+                    amount_minor=expense.amount_minor,
+                    currency=expense.currency,
+                    category=expense.category,
+                    description=expense.description,
+                    exchange_pair_id=pair_id,
+                    **common,
+                )
+                session.add(expense_tx)
+                session.flush()
+                expense_id = expense_tx.id
+                income_tx = Transaction(
+                    telegram_chat_id=message.chat.id,
+                    telegram_message_id=-message_id,
+                    telegram_user_id=message.from_user.id,
+                    transaction_type="INCOME",
+                    amount_minor=income.amount_minor,
+                    currency=income.currency,
+                    category=income.category,
+                    description=income.description,
+                    exchange_pair_id=pair_id,
+                    **common,
+                )
+                session.add(income_tx)
+                session.flush()
+                income_id = income_tx.id
+        except IntegrityError:
+            return None
         return expense_id if expense_id else income_id
 
     def create_scheduled_event(self, message, event, transcript: str, config) -> Optional[int]:
@@ -765,6 +825,64 @@ class Database:
             tx.family_id = family_id if scope == "family" else None
             tx.paid_by = paid_by or telegram_user_id
             return True
+
+    # ---- Pending exchange dialogs (P2-3) ----
+
+    def save_pending_exchange(self, telegram_user_id: int, parsed, transcript: str, chat_id: Optional[int] = None) -> None:
+        """Сохраняет диалог ожидания курса конвертации в БД (переживает рестарт)."""
+        with self.Session.begin() as session:
+            row = session.query(PendingExchange).filter_by(telegram_user_id=telegram_user_id).first()
+            if row is None:
+                row = PendingExchange(telegram_user_id=telegram_user_id)
+                session.add(row)
+            row.from_amount_minor = parsed.from_amount_minor
+            row.from_currency = parsed.from_currency
+            row.to_currency = parsed.to_currency
+            row.description = parsed.description
+            row.transcript = transcript
+            row.confidence = parsed.confidence
+            row.chat_id = chat_id
+            row.created_at_utc = datetime.now(timezone.utc)
+
+    def load_pending_exchange(self, telegram_user_id: int) -> Optional[dict]:
+        """Возвращает состояние ожидания курса либо None."""
+        with self.Session() as session:
+            row = session.query(PendingExchange).filter_by(telegram_user_id=telegram_user_id).first()
+            if row is None:
+                return None
+            if _as_utc(row.created_at_utc) + PENDING_EXCHANGE_TTL < datetime.now(timezone.utc):
+                session.delete(row)
+                return None
+            return {
+                "parsed": ParsedExchange(
+                    from_amount_minor=row.from_amount_minor,
+                    from_currency=row.from_currency,
+                    to_currency=row.to_currency,
+                    to_amount_minor=None,
+                    rate=None,
+                    description=row.description,
+                    confidence=float(row.confidence),
+                ),
+                "transcript": row.transcript,
+                "chat_id": row.chat_id,
+            }
+
+    def drop_pending_exchange(self, telegram_user_id: int) -> None:
+        with self.Session.begin() as session:
+            session.query(PendingExchange).filter_by(telegram_user_id=telegram_user_id).delete(synchronize_session=False)
+
+    def clean_expired_pending(self) -> int:
+        """Удаляет просроченные диалоги курса. Возвращает число удалённых."""
+        now = datetime.now(timezone.utc)
+        with self.Session.begin() as session:
+            rows = (
+                session.query(PendingExchange)
+                .filter(PendingExchange.created_at_utc + PENDING_EXCHANGE_TTL < now)
+                .all()
+            )
+            for row in rows:
+                session.delete(row)
+            return len(rows)
 
 
 def _invite_code() -> str:

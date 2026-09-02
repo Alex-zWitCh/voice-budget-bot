@@ -15,6 +15,8 @@ from handlers.voice_transaction_handler import VoiceTransactionHandler
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.stt_transcriber import FallbackTranscriber, SttTranscriber
 from services.reports import build_last_30_days_expense_chart, build_last_30_days_income_chart
+from services.access import is_allowed_call as _is_allowed_call
+from services.access import is_allowed_message as _is_allowed_message
 from services.scheduler import ScheduledEventRunner, calendar_text
 from welcome import COMMANDS, categories_text, commands_text, welcome_text
 
@@ -432,27 +434,7 @@ def _send_last_30_days_report(bot, db: Database, config: Config, chat_id: int, t
             path.unlink(missing_ok=True)
 
 
-def _is_allowed_message(config: Config, message) -> bool:
-    user_id = message.from_user.id if message.from_user else 0
-    return _is_allowed_identity(config, user_id, message.chat.id, message.chat.type)
 
-
-def _is_allowed_call(config: Config, call) -> bool:
-    user_id = call.from_user.id if call.from_user else 0
-    chat = call.message.chat if call.message else None
-    chat_id = chat.id if chat else 0
-    chat_type = chat.type if chat else "private"
-    return _is_allowed_identity(config, user_id, chat_id, chat_type)
-
-
-def _is_allowed_identity(config: Config, user_id: int, chat_id: int, chat_type: str) -> bool:
-    if config.allowed_user_ids and user_id not in config.allowed_user_ids:
-        return False
-    if chat_type in {"group", "supergroup"}:
-        return chat_id in config.allowed_chat_ids
-    if config.allowed_chat_ids:
-        return chat_id in config.allowed_chat_ids
-    return chat_type == "private"
 
 
 def main() -> int:

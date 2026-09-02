@@ -5,6 +5,27 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Pending exchange-rate dialogs are persisted in a new `pending_exchanges` table
+  and survive container restarts; expired dialogs are cleaned by the scheduler.
+- Report charts now warn (caption + log) when transactions are skipped because no
+  exchange rate to the user's main currency is known.
+- Monthly report bundle catch-up: if the 1st of the month is missed, the report is
+  retried on the 2nd and 3rd day (deduplicated via `report_deliveries`).
+- ffmpeg conversion errors now carry and log the stderr tail for diagnosis.
+- Centralized access checks in `services/access.py` shared by `bot.py` and the
+  voice/text handler.
+
+### Changed
+- `STT_VERIFY_SSL` defaults to `true` (secure by default); set explicitly to
+  `false` in `.env` only for a trusted network/self-signed gateway.
+- Concurrent currency conversions allocate unique `exchange_pair_id` values
+  (single IMMEDIATE transaction instead of a racy `MAX()+1` read).
+- `requirements.txt` pins `SQLAlchemy==2.0.52`.
+- Default voice limit documented as 20 seconds in `.env.example` and docs.
+
+## [2.1.0] - 2026-09-02
+
+### Added
 - Multi-currency tracking: transactions keep their own currency and amounts in
   integer minor units; new `EXCHANGE` intent converts money between currencies at a
   user-specified rate.

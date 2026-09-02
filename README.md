@@ -249,6 +249,24 @@ empty transcript, the same audio is sent to Groq. Voice transcripts and direct
 text messages are sent to DeepSeek for structured extraction. API keys are not
 written to logs.
 
+> **TLS для STT:** по умолчанию проверка сертификата включена (`STT_VERIFY_SSL=true`).
+> Если локальный шлюз использует самоподписанный сертификат, пробросьте CA в
+> контейнер (см. ниже) или явно задайте `STT_VERIFY_SSL=false` в `.env`.
+
+### Self-signed STT
+
+Если локальный STT-шлюз использует самоподписанный сертификат:
+
+1. Скопируйте CA в образ (в `Dockerfile`):
+   ```dockerfile
+   COPY certs/stt-ca.crt /usr/local/share/ca-certificates/stt-ca.crt
+   RUN update-ca-certificates
+   ```
+2. Установите `STT_VERIFY_SSL=true` в `.env` (по умолчанию уже `true`).
+
+При `STT_VERIFY_SSL=false` проверка TLS отключается, а предупреждения `urllib3`
+подавляются — используйте только для доверенной сети.
+
 ## Диагностические логи
 
 Для тестовой диагностики задайте `LOG_LEVEL=DEBUG`. Лог приложения хранится в
