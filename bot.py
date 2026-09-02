@@ -75,6 +75,7 @@ def _run_ask_question(bot, config: Config, ask_service: AskService, ask_semaphor
         bot.reply_to(message, "Сейчас обрабатывается другой аналитический вопрос. Повторите через несколько секунд.")
         return
     try:
+        bot.reply_to(message, "🤖 Анализирую ваши данные…")
         result = ask_service.ask(message.from_user.id, (message.text or "").strip())
         send_ask_result(bot, message.chat.id, result)
     except Exception:
@@ -460,7 +461,11 @@ def _send_welcome(bot, message, config) -> None:
     image_path = config.welcome_image_path
     if image_path.exists():
         with open(image_path, "rb") as image:
-            bot.send_photo(message.chat.id, image, caption=text, reply_markup=keyboard)
+            if len(text) <= 900:
+                bot.send_photo(message.chat.id, image, caption=text, reply_markup=keyboard)
+            else:
+                bot.send_photo(message.chat.id, image, reply_markup=keyboard)
+                bot.send_message(message.chat.id, text)
     else:
         bot.reply_to(message, text, reply_markup=keyboard)
     bot.send_message(message.chat.id, "Меню доступно кнопками ниже.", reply_markup=_main_menu_keyboard())

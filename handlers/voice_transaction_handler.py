@@ -60,6 +60,7 @@ class VoiceTransactionHandler:
         transcript = ""
         payload = None
         try:
+            self.bot.reply_to(message, "🎙️ Распознаю речь…")
             original_path = self._download_voice(message)
             audio_path = original_path
             if self.config.reencode_voice:

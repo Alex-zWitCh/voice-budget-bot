@@ -1,0 +1,6 @@
+[Unit]
+Description=Collect per-service memory/CPU metrics
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/collect-metrics.sh

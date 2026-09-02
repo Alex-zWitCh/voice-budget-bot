@@ -50,6 +50,7 @@ class AskVoiceHandler:
             return
         original_path = normalized_path = None
         try:
+            self.bot.reply_to(message, "🎙️ Распознаю ваш вопрос…")
             original_path = self._download_voice(message)
             audio_path = original_path
             if self.config.reencode_voice:
@@ -69,6 +70,7 @@ class AskVoiceHandler:
                     "⚠️ Речь не распознана.\nПовторите вопрос немного громче и короче.",
                 )
                 return
+            self.bot.reply_to(message, "🤖 Анализирую ваши данные…")
             result = self.ask_service.ask(message.from_user.id, transcript)
             send_ask_result(self.bot, message.chat.id, result)
         except AudioConversionError:

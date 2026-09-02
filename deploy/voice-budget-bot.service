@@ -1,0 +1,37 @@
+[Unit]
+Description=Voice Budget Bot (SmartExpense)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=voice-budget-bot
+Group=voice-budget-bot
+WorkingDirectory=/opt/voice-budget-bot
+EnvironmentFile=/opt/voice-budget-bot/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MPLCONFIGDIR=/opt/voice-budget-bot/data/tmp/mplcache
+ExecStart=/opt/voice-budget-bot/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/voice-budget-bot/data
+MemoryMax=384M
+MemorySwapMax=0
+CPUAccounting=yes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
