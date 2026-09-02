@@ -1,19 +1,50 @@
 # SmartExpense 2.0
 
-Telegram-бот для быстрого голосового и текстового учета личного и семейного бюджета.
-Рабочее имя проекта в коде и документации: Voice Budget Bot.
+> Voice-first personal & family budget tracking in Telegram.
+> Скажи расход — бот сам распознает, классифицирует и сохранит его.
+
+**Голос + Текст · Семейный бюджет · Мультивалютность · Отчёты**
+
+Telegram → voice/text → local STT / Groq → DeepSeek JSON → SQLite → PNG / CSV.
 
 <p align="center">
-  <img src="assets/readme-description.png?v=3" alt="Voice Budget Bot overview" width="900">
+  <img src="assets/readme/01-hero.png" alt="SmartExpense 2.0 overview" width="100%">
 </p>
 
-Пользователь отправляет короткое голосовое сообщение или обычный текст с одной
-операцией. Для voice бот проверяет длительность, нормализует аудио через FFmpeg
-и распознает речь через локальный OpenAI-compatible STT-шлюз
-(`Systran/faster-whisper-large-v3`, опционально резервный Groq). Затем и голосовая
-расшифровка, и текстовый ввод проходят один путь: DeepSeek извлекает структуру
-операции, а результат сохраняется в локальную SQLite-базу. Приветствие, картинка
-и подпись настраиваются через переменные окружения.
+## Что умеет
+
+- **Голосовые и текстовые записи**: скажите или напишите операцию — распознавание,
+  классификация и сохранение происходят автоматически.
+- **Локальный STT-шлюз** (`Systran/faster-whisper-large-v3`) с опциональным
+  резервным Groq — аудио не покидает вашу инфраструктуру без необходимости.
+- **DeepSeek-извлечение**: тип (расход/доход), сумма, валюта, категория, дата.
+- **Мультивалютность**: учёт в собственной валюте, конвертация по курсу или по
+  обеим суммам, зеркальные записи, `/balance` и `/currency`.
+- **Семейный слой**: семьи, участники, invite-код, scope `personal | family`.
+- **Отложенные списания и напоминания** с разовой и регулярной периодичностью.
+- **Отчёты**: PNG-диаграммы за 30 дней и ежемесячный пакет (PNG + CSV.gz) в
+  основной валюте.
+
+## Как это работает
+
+Голосовое сообщение или текст проходят один путь: проверка длительности,
+нормализация FFmpeg, распознавание локальным STT (или Groq), извлечение структуры
+DeepSeek, валидация и сохранение в локальную SQLite. Работает без ручного
+заполнения таблиц.
+
+<p align="center">
+  <img src="assets/readme/02-operation-flow.png" alt="How SmartExpense processes a single operation" width="100%">
+</p>
+
+## Основные сценарии
+
+От «кофе 1800 драм» и обмена валют до семейного бюджета и автоотчётов — без
+ручного ведения таблиц. Отложенные списания и напоминания используют тот же
+AI-парсинг и отдельный календарный сценарий.
+
+<p align="center">
+  <img src="assets/readme/03-use-cases.png" alt="SmartExpense use cases" width="100%">
+</p>
 
 В приветствии всегда показывается ссылка на автора форка:
 <https://github.com/Alex-zWitCh>. Эта ссылка встроена в код и не отключается
@@ -147,8 +178,17 @@ DeepSeek-based income/expense extraction and local storage.
 
 ## Bot Assets
 
-- `assets/bot-icon.png` is the source icon for the Telegram bot avatar.
-- `assets/readme-description.png` is the README overview image.
+- `assets/bot-icon.png` — source icon for the Telegram bot avatar (1254×1254).
+- `assets/readme-description.png` — Telegram “What can this bot do?” overview image
+  (used as `WELCOME_IMAGE_PATH` by default).
+- `assets/readme/01-hero.png` — README hero (overview banner).
+- `assets/readme/02-operation-flow.png` — how a single operation flows.
+- `assets/readme/03-use-cases.png` — main usage scenarios.
+- `assets/readme/04-deployment.png` — deployment and privacy diagram.
+
+<p align="center">
+  <img src="assets/readme-description.png?v=3" alt="Voice Budget Bot product overview" width="720">
+</p>
 
 ## Install On VPS
 
@@ -156,6 +196,10 @@ DeepSeek-based income/expense extraction and local storage.
 Установщик проверит окружение, поставит недостающие `curl`, `git`, Docker и
 Docker Compose, запросит токены, создаст `.env`, соберет контейнер и включит
 автозапуск через `restart: unless-stopped`.
+
+<p align="center">
+  <img src="assets/readme/04-deployment.png" alt="SmartExpense deployment and privacy" width="100%">
+</p>
 
 Одна строка установки:
 
