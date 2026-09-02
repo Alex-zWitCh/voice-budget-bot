@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from categories import CURRENCY_SYMBOLS, category_title
 from schemas import ParsedExchange, ParsedScheduledEvent, ValidationError, validate_voice_intent
+from services.access import is_allowed_message
 from services.audio_converter import AudioConversionError, normalize_voice
 from services.deepseek_transaction_parser import DeepSeekParserError
 from services.stt_transcriber import TranscriptionError
@@ -25,14 +26,13 @@ class VoiceTransactionHandler:
         self.transcriber = transcriber
         self.parser = parser
         self.semaphore = semaphore
-        self.exchange_states = {}
 
     def handle(self, message) -> None:
         started = time.monotonic()
-        if not self._is_allowed(message):
+        if not is_allowed_message(self.config, message):
             return
 
-        if message.from_user.id in self.exchange_states:
+        if self.pending_exchange(message.from_user.id):
             self.bot.reply_to(message, "Сначала укажите курс конвертации числом (например: 92).")
             return
 
@@ -69,7 +69,14 @@ class VoiceTransactionHandler:
             category_catalog = self.db.get_category_catalog(message.from_user.id)
             transcript = self.transcriber.transcribe(audio_path)
             self._process_transcript(message, started, transcript, category_catalog)
-        except AudioConversionError:
+        except AudioConversionError as exc:
+            logger.warning(
+                "ffmpeg conversion failed chat_id=%s message_id=%s user_id=%s stderr=%r",
+                message.chat.id,
+                message.message_id,
+                message.from_user.id,
+                _truncate(exc.stderr, 2000),
+            )
             self._fail(message, "transcription_failed", "ffmpeg_failed", "⚠️ Не удалось подготовить голосовое сообщение.\nПовторите запись ещё раз.")
         except TranscriptionError:
             self._fail(message, "transcription_failed", "groq_failed", "⚠️ Речь не распознана.\nПовторите сообщение немного громче и короче.")
@@ -96,7 +103,7 @@ class VoiceTransactionHandler:
     def handle_text(self, message) -> None:
         """Process a plain text message through the same parser path as STT output."""
         started = time.monotonic()
-        if not self._is_allowed(message):
+        if not is_allowed_message(self.config, message):
             return
 
         transcript = (message.text or "").strip()
@@ -159,30 +166,38 @@ class VoiceTransactionHandler:
         return payload
 
     def pending_exchange(self, telegram_user_id: int) -> bool:
-        return telegram_user_id in self.exchange_states
+        return self.db.load_pending_exchange(telegram_user_id) is not None
 
     def handle_rate_reply(self, message) -> bool:
-        state = self.exchange_states.pop(message.from_user.id, None)
+        state = self.db.load_pending_exchange(message.from_user.id)
         if not state:
             return False
         if (message.text or "").lstrip().startswith("/"):
+            self.db.drop_pending_exchange(message.from_user.id)
             self.bot.reply_to(message, "Конвертация отменена.")
             return True
         rate = _extract_rate(message.text or "")
+        parsed = state["parsed"]
         if rate is None:
-            self.exchange_states[message.from_user.id] = state
+            self.db.save_pending_exchange(
+                message.from_user.id,
+                parsed,
+                state["transcript"],
+                state.get("chat_id"),
+            )
             self.bot.reply_to(
                 message,
-                f"Не понял курс. Ответьте числом, например: {_format_amount(state['parsed'].from_amount_minor, state['parsed'].from_currency)} → {state['parsed'].to_currency}",
+                f"Не понял курс. Ответьте числом, например: {_format_amount(parsed.from_amount_minor, parsed.from_currency)} → {parsed.to_currency}",
             )
             return True
-        parsed = state["parsed"].with_rate(rate)
+        self.db.drop_pending_exchange(message.from_user.id)
+        parsed = parsed.with_rate(rate)
         self._save_exchange(message, state["transcript"], parsed)
         return True
 
     def _handle_exchange(self, message, started: float, parsed: ParsedExchange, transcript: str) -> None:
         if parsed.rate is None:
-            self.exchange_states[message.from_user.id] = {"parsed": parsed, "transcript": transcript}
+            self.db.save_pending_exchange(message.from_user.id, parsed, transcript, message.chat.id)
             self.db.record_event(message, "rate_required", "rate_required", duration_ms=int((time.monotonic() - started) * 1000))
             from_amount = _format_amount(parsed.from_amount_minor, parsed.from_currency)
             self.bot.reply_to(
@@ -209,17 +224,6 @@ class VoiceTransactionHandler:
 
     def _already_processed(self, message) -> bool:
         return self.db.transaction_exists(message.chat.id, message.message_id) or self.db.scheduled_event_exists(message.chat.id, message.message_id)
-
-    def _is_allowed(self, message) -> bool:
-        chat_id = message.chat.id
-        user_id = message.from_user.id if message.from_user else 0
-        if self.config.allowed_user_ids and user_id not in self.config.allowed_user_ids:
-            return False
-        if message.chat.type in {"group", "supergroup"}:
-            return chat_id in self.config.allowed_chat_ids
-        if self.config.allowed_chat_ids:
-            return chat_id in self.config.allowed_chat_ids
-        return message.chat.type == "private"
 
     def _download_voice(self, message):
         base_dir = self.config.temp_audio_dir / str(message.chat.id) / str(message.from_user.id)

@@ -1,6 +1,8 @@
 import csv
 import gzip
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -11,6 +13,7 @@ from database import Database, Transaction
 from schemas import ParsedExchange, ParsedScheduledEvent, ParsedTransaction
 from decimal import Decimal
 from services.reports import (
+    build_category_chart,
     build_last_30_days_expense_chart,
     build_last_30_days_income_chart,
     build_previous_month_expense_chart,
@@ -262,6 +265,42 @@ def test_monthly_report_is_sent_once_on_first_day(tmp_path):
     assert "Автоматический отчет" in bot.photos[1][1]
     assert len(bot.documents) == 1
     assert bot.documents[0][0] == 1
+    assert bot.documents[0][1].endswith(".csv.gz")
+
+
+def test_monthly_report_catch_up_on_second_day(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(
+        stt_model="whisper-large-v3",
+        deepseek_model="deepseek-v4-flash",
+        processing_version="1.0",
+        app_timezone="Europe/Moscow",
+        temp_audio_dir=tmp_path,
+    )
+    message = _message(message_id=72)
+    previous_month = _previous_month_datetime()
+    message.date = int(previous_month.astimezone(timezone.utc).timestamp())
+    parsed = ParsedTransaction("EXPENSE", 140000, "RUB", "PRODUCTS", "продукты", 0.95)
+    db.upsert_user_and_chat(message)
+    db.save_transaction(message, parsed, "тысяча четыреста продукты", config)
+
+    bot = SimpleNamespace(photos=[], documents=[], messages=[])
+    bot.send_photo = lambda chat_id, image, caption: bot.photos.append((chat_id, caption, image.read(4)))
+    bot.send_document = lambda chat_id, file, visible_file_name, caption: bot.documents.append(
+        (chat_id, visible_file_name, caption, file.read(2))
+    )
+    bot.send_message = lambda chat_id, text: bot.messages.append((chat_id, text))
+    runner = ScheduledEventRunner(bot, db, config)
+
+    tz = ZoneInfo("Europe/Moscow")
+    now_local = datetime.now(tz)
+    second_day = now_local.replace(day=2, hour=9, minute=0, second=0, microsecond=0)
+
+    runner._process_monthly_reports(second_day.astimezone(timezone.utc))
+    runner._process_monthly_reports(second_day.astimezone(timezone.utc))
+
+    assert len(bot.photos) == 1
+    assert len(bot.documents) == 1
     assert bot.documents[0][1].endswith(".csv.gz")
 
 
@@ -567,3 +606,110 @@ def test_csv_export_includes_main_and_exchange_columns(tmp_path):
     assert income["exchange_rate"] == "92"
     assert income["main_currency"] == "RUB"
     assert income["amount_main_minor"] == "18400000"
+
+
+def test_concurrent_exchanges_get_unique_pair_ids(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    for user_id in (1, 2, 3, 4):
+        db.upsert_user_and_chat(SimpleNamespace(
+            chat=SimpleNamespace(id=user_id, type="private", title=None),
+            from_user=SimpleNamespace(id=user_id, username=f"u{user_id}", first_name=f"U{user_id}", last_name=None),
+            message_id=1,
+            date=int(datetime.now(timezone.utc).timestamp()),
+            voice=None,
+        ))
+
+    barrier = threading.Barrier(4)
+
+    def _run(user_id, message_id):
+        msg = SimpleNamespace(
+            chat=SimpleNamespace(id=user_id, type="private", title=None),
+            from_user=SimpleNamespace(id=user_id, username=f"u{user_id}", first_name=f"U{user_id}", last_name=None),
+            message_id=message_id,
+            date=int(datetime.now(timezone.utc).timestamp()),
+            voice=None,
+        )
+        barrier.wait()
+        return db.create_exchange(msg, _parsed_exchange(), f"перевёл 2000 долларов в рубли по курсу 92 u{user_id}", config)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        expense_ids = list(pool.map(_run, (1, 2, 3, 4), (101, 102, 103, 104)))
+
+    assert all(eid is not None for eid in expense_ids)
+
+    with db.Session() as session:
+        rows = session.query(Transaction).filter(Transaction.exchange_pair_id.is_not(None)).all()
+    pair_ids = sorted({row.exchange_pair_id for row in rows})
+    assert len(rows) == 8
+    assert len(pair_ids) == 4, f"ожидали 4 уникальных pair_id, получили {pair_ids}"
+    from collections import Counter
+    counts = Counter(row.exchange_pair_id for row in rows)
+    assert all(count == 2 for count in counts.values())
+
+
+def test_pending_exchange_persists_across_db_reopen(tmp_path):
+    path = tmp_path / "test.sqlite3"
+    db = Database(path)
+    parsed = _parsed_exchange().with_rate(None)
+    db.save_pending_exchange(20, parsed, "перевёл 2000 долларов в рубли", chat_id=1)
+
+    assert db.load_pending_exchange(20) is not None
+
+    db2 = Database(path)
+    state = db2.load_pending_exchange(20)
+    assert state is not None
+    assert state["parsed"].from_amount_minor == 200000
+    assert state["parsed"].from_currency == "USD"
+    assert state["parsed"].to_currency == "RUB"
+    assert state["parsed"].rate is None
+    assert state["chat_id"] == 1
+
+    db2.drop_pending_exchange(20)
+    assert db2.load_pending_exchange(20) is None
+
+
+def test_pending_exchange_expires_after_ttl(tmp_path):
+    from database import PendingExchange, PENDING_EXCHANGE_TTL
+    db = Database(tmp_path / "test.sqlite3")
+    parsed = _parsed_exchange().with_rate(None)
+    db.save_pending_exchange(20, parsed, "перевёл 2000 долларов в рубли", chat_id=1)
+
+    with db.Session.begin() as session:
+        row = session.query(PendingExchange).filter_by(telegram_user_id=20).first()
+        row.created_at_utc = datetime.now(timezone.utc) - PENDING_EXCHANGE_TTL - timedelta(seconds=1)
+
+    removed = db.clean_expired_pending()
+    assert removed == 1
+    assert db.load_pending_exchange(20) is None
+
+
+def test_chart_warns_when_rate_missing(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _message(chat_id=1, message_id=200, user_id=20)
+    db.upsert_user_and_chat(message)
+    db.set_main_currency(20, "RUB")
+
+    from datetime import datetime as _dt
+    msg_usd = _message(chat_id=1, message_id=201, user_id=20)
+    msg_usd.date = int((datetime.now(timezone.utc)).timestamp())
+    db.save_transaction(
+        msg_usd,
+        ParsedTransaction("EXPENSE", 100000, "USD", "PRODUCTS", "импортные продукты", 0.95),
+        "импортные продукты доллары",
+        config,
+    )
+
+    tz = ZoneInfo("Europe/Moscow")
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=1)
+    path, caption = build_category_chart(
+        db=db, telegram_user_id=20, app_timezone="Europe/Moscow", output_dir=tmp_path,
+        transaction_type="EXPENSE", start_local=start_local, end_local=end_local,
+        period_title="тест", empty_text="Расходов не найдено.", caption="Расходы",
+        filename_suffix="test",
+    )
+    assert path is None
+    assert "Пропущено" in caption
+    assert "USD" in caption

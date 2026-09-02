@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -14,6 +15,8 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from categories import CURRENCY_SYMBOLS
+
+logger = logging.getLogger(__name__)
 
 
 def export_transactions_csv_gz(
@@ -206,24 +209,41 @@ def build_category_chart(
     rates = _build_rate_map(db.get_exchange_rates(telegram_user_id))
 
     totals: dict[tuple[str, str], int] = defaultdict(int)
+    skipped: list[str] = []
     for row in rows:
         if row.transaction_type != transaction_type:
             continue
         base_minor = _to_base_minor(row, main_currency, rates)
         if base_minor is None:
+            skipped.append(f"{row.amount_minor / 100:.2f} {row.currency}")
             continue
         title = category_catalog.get(transaction_type, {}).get(row.category, row.category)
         totals[(row.category, title)] += base_minor
 
+    if skipped:
+        logger.warning(
+            "Report skipped %d transactions without a rate to %s (user=%s type=%s)",
+            len(skipped),
+            main_currency,
+            telegram_user_id,
+            transaction_type,
+        )
+
     if not totals:
-        return None, f"{empty_text} В основной валюте {main_currency} операций не найдено."
+        suffix = ""
+        if skipped:
+            suffix = f" Пропущено {len(skipped)} записей без курса в {main_currency} (например, {skipped[0]})."
+        return None, f"{empty_text} В основной валюте {main_currency} операций не найдено.{suffix}"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "expenses" if transaction_type == "EXPENSE" else "income"
     title = "Расходы" if transaction_type == "EXPENSE" else "Доходы"
     path = output_dir / f"{prefix}-{telegram_user_id}-{filename_suffix}.png"
     _render_pie_chart(path, totals, main_currency, period_title, title)
-    return path, caption
+    caption_extra = ""
+    if skipped:
+        caption_extra = f"\n\n⚠️ Пропущено {len(skipped)} записей без курса в {main_currency} (например, {skipped[0]})."
+    return path, caption + caption_extra
 
 
 def previous_month_period(app_timezone: str, now_local: datetime | None = None) -> tuple[datetime, datetime, str]:

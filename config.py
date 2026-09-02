@@ -63,7 +63,7 @@ class Config:
             stt_api_key=os.getenv("STT_API_KEY", ""),
             stt_model=os.getenv("STT_MODEL", "Systran/faster-whisper-large-v3"),
             stt_timeout_sec=int(os.getenv("STT_TIMEOUT_SEC", "120")),
-            stt_verify_ssl=os.getenv("STT_VERIFY_SSL", "false").lower() in {"1", "true", "yes", "on"},
+            stt_verify_ssl=os.getenv("STT_VERIFY_SSL", "true").lower() in {"1", "true", "yes", "on"},
             groq_fallback_enabled=os.getenv("GROQ_FALLBACK_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             groq_base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),

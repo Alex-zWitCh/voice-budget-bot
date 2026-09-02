@@ -3,7 +3,10 @@ from pathlib import Path
 
 
 class AudioConversionError(Exception):
-    pass
+    def __init__(self, message: str, stderr: str = ""):
+        super().__init__(message)
+        self.message = message
+        self.stderr = stderr or ""
 
 
 def normalize_voice(input_path: Path, output_path: Path, sample_rate: int, bitrate: str, timeout_sec: int = 15) -> Path:
@@ -26,8 +29,11 @@ def normalize_voice(input_path: Path, output_path: Path, sample_rate: int, bitra
         str(output_path),
     ]
     try:
-        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=timeout_sec)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise AudioConversionError("ffmpeg_failed") from exc
+        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True, timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        stderr = getattr(exc, "stderr", None) or ""
+        raise AudioConversionError("ffmpeg_failed", stderr=stderr[-2000:]) from exc
+    except subprocess.CalledProcessError as exc:
+        raise AudioConversionError("ffmpeg_failed", stderr=(exc.stderr or "")[-2000:]) from exc
     return output_path
 
