@@ -51,6 +51,29 @@ class Config:
     welcome_intro: str
     welcome_footer: str
     welcome_image_path: Path
+    ask_enabled: bool
+    ask_model: str
+    ask_api_url: str
+    ask_api_key: str
+    ask_timeout_sec: int
+    ask_session_ttl_sec: int
+    ask_max_rows: int
+    ask_max_question_length: int
+    ask_max_voice_duration_sec: int
+    ask_max_concurrent_processing: int
+    ask_temp_dir: Path
+
+    @property
+    def ask_api_key_effective(self) -> str:
+        return self.ask_api_key or self.deepseek_api_key
+
+    @property
+    def ask_api_url_effective(self) -> str:
+        return self.ask_api_url or self.deepseek_api_url
+
+    @property
+    def ask_model_effective(self) -> str:
+        return self.ask_model or self.deepseek_model
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -93,6 +116,17 @@ class Config:
             ),
             welcome_footer=os.getenv("WELCOME_FOOTER", ""),
             welcome_image_path=Path(os.getenv("WELCOME_IMAGE_PATH", "assets/readme-description.png")),
+            ask_enabled=os.getenv("ASK_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
+            ask_model=os.getenv("ASK_MODEL", ""),
+            ask_api_url=os.getenv("ASK_API_URL", ""),
+            ask_api_key=os.getenv("ASK_API_KEY", ""),
+            ask_timeout_sec=int(os.getenv("ASK_TIMEOUT_SEC", "30")),
+            ask_session_ttl_sec=int(os.getenv("ASK_SESSION_TTL_SEC", "600")),
+            ask_max_rows=int(os.getenv("ASK_MAX_ROWS", "500")),
+            ask_max_question_length=int(os.getenv("ASK_MAX_QUESTION_LENGTH", "2000")),
+            ask_max_voice_duration_sec=int(os.getenv("ASK_MAX_VOICE_DURATION_SEC", "60")),
+            ask_max_concurrent_processing=int(os.getenv("ASK_MAX_CONCURRENT_PROCESSING", "1")),
+            ask_temp_dir=Path(os.getenv("ASK_TEMP_DIR", "/tmp/voice-budget-bot/ask")),
         )
 
     def validate(self) -> None:
@@ -111,3 +145,13 @@ class Config:
             raise ValueError("MAX_VOICE_DURATION_SEC must be positive")
         if self.max_concurrent_processing <= 0:
             raise ValueError("MAX_CONCURRENT_PROCESSING must be positive")
+        if self.ask_session_ttl_sec <= 0:
+            raise ValueError("ASK_SESSION_TTL_SEC must be positive")
+        if self.ask_max_rows <= 0:
+            raise ValueError("ASK_MAX_ROWS must be positive")
+        if self.ask_max_question_length <= 0:
+            raise ValueError("ASK_MAX_QUESTION_LENGTH must be positive")
+        if self.ask_max_voice_duration_sec <= 0:
+            raise ValueError("ASK_MAX_VOICE_DURATION_SEC must be positive")
+        if self.ask_max_concurrent_processing <= 0:
+            raise ValueError("ASK_MAX_CONCURRENT_PROCESSING must be positive")

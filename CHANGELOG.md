@@ -5,6 +5,23 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- `/ask`: read-only natural-language analytics over personal and family records.
+  Text or voice question → text or PNG-infographic answer. Includes:
+  - `AnalyticsRepository` with a separate SQLite read-only connection
+    (`mode=ro` + `PRAGMA query_only=ON`) and enforced visibility predicates
+    (personal scope and family scope), no write methods.
+  - Deterministic policy classifier that rejects write requests, out-of-scope and
+    prompt-injection/security attempts before any query.
+  - Query planner (optional LLM via DeepSeek or a dedicated `ASK_*` endpoint,
+    with deterministic fallback), server-side `AnalyticsCalculator` for all
+    arithmetic in integer minor units, and `AskRenderer` producing text or PNG
+    (bar/line/pie) output.
+  - In-memory `/ask` sessions with `/cancel` and `ASK_SESSION_TTL_SEC`,
+    `ASK_MAX_ROWS`, `ASK_MAX_QUESTION_LENGTH` and rate limiting.
+  - Shared currency-conversion helpers extracted to
+    `services/currency_conversion.py` (used by both reports and /ask).
+- Security tests for family isolation, SQLite read-only enforcement and policy
+  classification.
 - Pending exchange-rate dialogs are persisted in a new `pending_exchanges` table
   and survive container restarts; expired dialogs are cleaned by the scheduler.
 - Report charts now warn (caption + log) when transactions are skipped because no

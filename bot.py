@@ -3,7 +3,9 @@ import os
 import signal
 import sys
 import threading
+from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
+from time import monotonic
 
 import telebot
 from telebot import apihelper, types
@@ -11,14 +13,75 @@ from telebot import apihelper, types
 from categories import CURRENCY_SYMBOLS, SUPPORTED_CURRENCIES, format_categories
 from config import Config
 from database import Database
+from handlers.ask_handler import AskVoiceHandler, send_ask_result
 from handlers.voice_transaction_handler import VoiceTransactionHandler
+from services.analytics_calculator import AnalyticsCalculator
+from services.analytics_repository import AnalyticsRepository
+from services.ask_llm import AskLLMClient
+from services.ask_planner import AskPlanner
+from services.ask_policy import AskPolicy
+from services.ask_renderer import AskRenderer
+from services.ask_service import AskService
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.stt_transcriber import FallbackTranscriber, SttTranscriber
 from services.reports import build_last_30_days_expense_chart, build_last_30_days_income_chart
 from services.access import is_allowed_call as _is_allowed_call
 from services.access import is_allowed_message as _is_allowed_message
 from services.scheduler import ScheduledEventRunner, calendar_text
-from welcome import COMMANDS, categories_text, commands_text, welcome_text
+from welcome import COMMANDS, commands_text, welcome_text
+
+
+ASK_INVITE_TEXT = (
+    "🤖 Анализ финансовых данных\n\n"
+    "Задайте вопрос текстом или голосом.\n"
+    "Я могу анализировать ваши личные записи и доступные семейные записи: "
+    "расходы, доходы, категории, валюты, динамику и сравнение периодов.\n\n"
+    "Ответ будет текстом или инфографикой.\n\n"
+    "Для отмены: /cancel"
+)
+ASK_DISABLED_TEXT = "Функция /ask сейчас отключена."
+
+
+@dataclass
+class AskState:
+    chat_id: int
+    started_at: float
+
+
+def _take_ask_state(config: Config, ask_states: dict[int, AskState], telegram_user_id: int) -> bool:
+    state = ask_states.pop(telegram_user_id, None)
+    if state is None:
+        return False
+    if monotonic() - state.started_at > config.ask_session_ttl_sec:
+        return False
+    return True
+
+
+def _ask_session_active(config: Config, ask_states: dict[int, AskState], telegram_user_id: int) -> bool:
+    state = ask_states.get(telegram_user_id)
+    if state is None:
+        return False
+    if monotonic() - state.started_at > config.ask_session_ttl_sec:
+        ask_states.pop(telegram_user_id, None)
+        return False
+    return True
+
+
+def _run_ask_question(bot, config: Config, ask_service: AskService, ask_semaphore, message) -> None:
+    if not _is_allowed_message(config, message):
+        return
+    acquired = ask_semaphore.acquire(blocking=False)
+    if not acquired:
+        bot.reply_to(message, "Сейчас обрабатывается другой аналитический вопрос. Повторите через несколько секунд.")
+        return
+    try:
+        result = ask_service.ask(message.from_user.id, (message.text or "").strip())
+        send_ask_result(bot, message.chat.id, result)
+    except Exception:
+        logging.getLogger(__name__).exception("Unhandled ask error user_id=%s", message.from_user.id)
+        bot.reply_to(message, "⚠️ Не удалось выполнить запрос. Попробуйте ещё раз.")
+    finally:
+        ask_semaphore.release()
 
 
 def build_bot(config: Config):
@@ -56,6 +119,28 @@ def build_bot(config: Config):
         parser=DeepSeekTransactionParser(config.deepseek_api_key, config.deepseek_api_url, config.deepseek_model, config.deepseek_timeout_sec),
         semaphore=semaphore,
     )
+    ask_states: dict[int, AskState] = {}
+    analytics_repository = AnalyticsRepository(config.sqlite_db_path)
+    ask_llm_client = None
+    if config.ask_enabled and config.ask_api_key_effective:
+        ask_llm_client = AskLLMClient(
+            config.ask_api_key_effective,
+            config.ask_api_url_effective,
+            config.ask_model_effective,
+            config.ask_timeout_sec,
+        )
+    ask_planner = AskPlanner(llm_client=ask_llm_client, app_timezone=config.app_timezone)
+    ask_service = AskService(
+        config=config,
+        repository=analytics_repository,
+        policy=AskPolicy(),
+        planner=ask_planner,
+        calculator=AnalyticsCalculator(),
+        renderer=AskRenderer(config.ask_temp_dir, config.app_timezone),
+        llm_client=ask_llm_client,
+    )
+    ask_semaphore = threading.BoundedSemaphore(config.ask_max_concurrent_processing)
+    ask_voice_handler = AskVoiceHandler(bot, config, transcriber, ask_service, ask_semaphore)
 
     @bot.message_handler(commands=["start", "help"])
     def start(message):
@@ -143,6 +228,34 @@ def build_bot(config: Config):
                 "already_in_family": "Вы уже состоите в семье.",
             }
             bot.reply_to(message, messages.get(family_name, "Не удалось вступить в семью."))
+
+    @bot.message_handler(commands=["ask"])
+    def ask_command(message):
+        if not _is_allowed_message(config, message):
+            return
+        if not config.ask_enabled:
+            bot.reply_to(message, ASK_DISABLED_TEXT)
+            return
+        if _ask_session_active(config, ask_states, message.from_user.id):
+            bot.reply_to(message, "Вы уже в режиме /ask.\nЗадайте вопрос или отмените режим: /cancel")
+            return
+        if handler.pending_exchange(message.from_user.id):
+            bot.reply_to(message, "Сначала завершите текущую конвертацию (укажите курс) или отмените её, отправив команду.")
+            return
+        if message.from_user.id in category_states:
+            bot.reply_to(message, "Сначала завершите добавление категории или отмените его.")
+            return
+        ask_states[message.from_user.id] = AskState(chat_id=message.chat.id, started_at=monotonic())
+        bot.reply_to(message, ASK_INVITE_TEXT)
+
+    @bot.message_handler(commands=["cancel"])
+    def cancel_command(message):
+        if not _is_allowed_message(config, message):
+            return
+        if ask_states.pop(message.from_user.id, None):
+            bot.reply_to(message, "Режим анализа отменён.")
+        else:
+            bot.reply_to(message, "Нет активного запроса для отмены.")
 
     @bot.callback_query_handler(func=lambda call: call.data == "show_categories")
     def show_categories(call):
@@ -246,11 +359,21 @@ def build_bot(config: Config):
 
     @bot.message_handler(content_types=["voice"])
     def voice(message):
+        if _take_ask_state(config, ask_states, message.from_user.id):
+            ask_voice_handler.handle(message)
+            return
         handler.handle(message)
 
     @bot.message_handler(content_types=["text", "audio", "video", "video_note", "document", "photo", "sticker", "contact", "location"])
     def unsupported(message):
         if not _is_allowed_message(config, message):
+            return
+        if (
+            message.content_type == "text"
+            and not (message.text or "").lstrip().startswith("/")
+            and _take_ask_state(config, ask_states, message.from_user.id)
+        ):
+            _run_ask_question(bot, config, ask_service, ask_semaphore, message)
             return
         if message.content_type == "text" and _handle_menu_text(bot, db, config, message, category_states):
             return

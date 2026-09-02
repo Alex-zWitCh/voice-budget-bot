@@ -5,7 +5,6 @@ import gzip
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -15,6 +14,11 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from categories import CURRENCY_SYMBOLS
+from services.currency_conversion import (
+    build_rate_map as _build_rate_map,
+    format_exchange_rate as _format_exchange_rate,
+    to_base_minor as _to_base_minor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -251,47 +255,6 @@ def previous_month_period(app_timezone: str, now_local: datetime | None = None) 
     now_local = now_local or datetime.now(tz)
     start_local, end_local = _previous_month_range(now_local)
     return start_local, end_local, start_local.strftime("%Y-%m")
-
-
-def _build_rate_map(rates_rows: list[tuple[str, str, Decimal]]) -> dict[tuple[str, str], Decimal]:
-    rates: dict[tuple[str, str], Decimal] = {}
-    for from_currency, to_currency, rate in rates_rows:
-        rates[(from_currency, to_currency)] = rate
-    return rates
-
-
-def _format_exchange_rate(rate) -> str:
-    if rate is None:
-        return ""
-    return format(Decimal(str(rate)).normalize(), "f")
-
-
-def _rate_lookup(currency_from: str, currency_to: str, rates: dict[tuple[str, str], Decimal]) -> Decimal | None:
-    if currency_from == currency_to:
-        return Decimal(1)
-    direct = rates.get((currency_from, currency_to))
-    if direct is not None:
-        return direct
-    reverse = rates.get((currency_to, currency_from))
-    if reverse is not None:
-        return Decimal(1) / reverse
-    return None
-
-
-def _to_base_minor(row, main_currency: str, rates: dict[tuple[str, str], Decimal]) -> int | None:
-    """Переводит сумму записи в основную валюту через сохранённые курсы конвертаций."""
-    if row.currency == main_currency and row.exchange_rate is None:
-        return row.amount_minor
-    if row.exchange_rate is not None and row.from_currency and row.transaction_type == "INCOME":
-        anchor_currency = row.from_currency
-        anchor_minor = row.amount_minor / Decimal(str(row.exchange_rate))
-    else:
-        anchor_currency = row.currency
-        anchor_minor = row.amount_minor
-    factor = _rate_lookup(anchor_currency, main_currency, rates)
-    if factor is None:
-        return None
-    return int(round(anchor_minor * factor))
 
 
 def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: str, period: str, title: str) -> None:

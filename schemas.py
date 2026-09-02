@@ -1,7 +1,8 @@
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Optional, Union
+from pathlib import Path
+from typing import Literal, Optional, Union
 from zoneinfo import ZoneInfo
 
 from categories import CATEGORY_BY_TYPE, SUPPORTED_CURRENCIES
@@ -284,3 +285,91 @@ def default_notify_at(event_at_utc: datetime, time_was_specified: bool) -> datet
     if time_was_specified:
         return event_at_utc - timedelta(minutes=30)
     return event_at_utc
+
+
+# ---- /ask read-only analytics ----
+
+ASK_SCOPE_PERSONAL = "PERSONAL"
+ASK_SCOPE_FAMILY = "FAMILY"
+ASK_SCOPE_ACCESSIBLE = "ACCESSIBLE"
+ASK_SCOPE_MY_PAYMENTS = "MY_PAYMENTS"
+ASK_SCOPES = (ASK_SCOPE_PERSONAL, ASK_SCOPE_FAMILY, ASK_SCOPE_ACCESSIBLE, ASK_SCOPE_MY_PAYMENTS)
+
+ASK_GROUP_BY_NONE = "NONE"
+ASK_GROUP_BY_DAY = "DAY"
+ASK_GROUP_BY_WEEK = "WEEK"
+ASK_GROUP_BY_MONTH = "MONTH"
+ASK_GROUP_BY_CATEGORY = "CATEGORY"
+ASK_GROUP_BY_CURRENCY = "CURRENCY"
+ASK_GROUP_BY_SCOPE = "SCOPE"
+ASK_GROUP_BY_VALUES = (ASK_GROUP_BY_NONE, ASK_GROUP_BY_DAY, ASK_GROUP_BY_WEEK, ASK_GROUP_BY_MONTH, ASK_GROUP_BY_CATEGORY, ASK_GROUP_BY_CURRENCY, ASK_GROUP_BY_SCOPE)
+
+ASK_METRIC_SUM = "SUM"
+ASK_METRIC_AVG = "AVG"
+ASK_METRIC_COUNT = "COUNT"
+ASK_METRIC_MIN = "MIN"
+ASK_METRIC_MAX = "MAX"
+ASK_METRIC_SHARE = "SHARE"
+ASK_METRIC_CHANGE_PERCENT = "CHANGE_PERCENT"
+ASK_METRIC_VALUES = (ASK_METRIC_SUM, ASK_METRIC_AVG, ASK_METRIC_COUNT, ASK_METRIC_MIN, ASK_METRIC_MAX, ASK_METRIC_SHARE, ASK_METRIC_CHANGE_PERCENT)
+
+ASK_OUTPUT_AUTO = "AUTO"
+ASK_OUTPUT_TEXT = "TEXT"
+ASK_OUTPUT_INFOGRAPHIC = "INFOGRAPHIC"
+ASK_OUTPUT_PREFERENCE_VALUES = (ASK_OUTPUT_AUTO, ASK_OUTPUT_TEXT, ASK_OUTPUT_INFOGRAPHIC)
+
+
+@dataclass(frozen=True)
+class AskAccessScope:
+    telegram_user_id: int
+    family_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class AnalyticsTransaction:
+    id: int
+    transaction_type: str
+    amount_minor: int
+    currency: str
+    category: str
+    description: str
+    transcript: str
+    message_date_utc: datetime
+    scope: str
+    paid_by_current_user: bool
+    exchange_rate: Optional[Decimal] = None
+    from_currency: Optional[str] = None
+    from_amount_minor: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class AskQueryPlan:
+    transaction_type: Optional[str] = None
+    data_scope: str = ASK_SCOPE_ACCESSIBLE
+    date_from_utc: Optional[datetime] = None
+    date_to_utc: Optional[datetime] = None
+    categories: tuple[str, ...] = ()
+    currencies: tuple[str, ...] = ()
+    text_terms: tuple[str, ...] = ()
+    group_by: str = ASK_GROUP_BY_NONE
+    metrics: tuple[str, ...] = (ASK_METRIC_SUM,)
+    semantic_filter_required: bool = False
+    output_preference: str = ASK_OUTPUT_AUTO
+
+
+@dataclass(frozen=True)
+class AskResult:
+    output_type: Literal["TEXT", "INFOGRAPHIC"]
+    text: Optional[str] = None
+    image_path: Optional[Path] = None
+    caption: Optional[str] = None
+
+    def validate(self) -> None:
+        if self.output_type == "TEXT":
+            if self.text is None or self.image_path is not None:
+                raise ValueError("Invalid AskResult: TEXT must have text and no image_path")
+        elif self.output_type == "INFOGRAPHIC":
+            if self.image_path is None:
+                raise ValueError("Invalid AskResult: INFOGRAPHIC must have image_path")
+        else:
+            raise ValueError(f"Invalid AskResult output_type: {self.output_type!r}")
