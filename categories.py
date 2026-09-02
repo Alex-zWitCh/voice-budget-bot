@@ -37,8 +37,8 @@ CATEGORY_BY_TYPE = {
     "INCOME": INCOME_CATEGORIES,
 }
 
-SUPPORTED_CURRENCIES = {"RUB", "USD", "EUR", "GBP", "CNY", "UZS", "KZT"}
-CURRENCY_SYMBOLS = {"RUB": "₽", "USD": "$", "EUR": "€", "GBP": "£", "CNY": "¥", "UZS": "UZS", "KZT": "₸"}
+SUPPORTED_CURRENCIES = {"RUB", "USD", "EUR", "GBP", "CNY", "UZS", "KZT", "AMD"}
+CURRENCY_SYMBOLS = {"RUB": "₽", "USD": "$", "EUR": "€", "GBP": "£", "CNY": "¥", "UZS": "UZS", "KZT": "₸", "AMD": "֏"}
 
 
 def category_title(transaction_type: str, category: str) -> str:

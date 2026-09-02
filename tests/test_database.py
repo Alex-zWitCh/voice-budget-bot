@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
-from database import Database
-from schemas import ParsedScheduledEvent, ParsedTransaction
+from database import Database, Transaction
+from schemas import ParsedExchange, ParsedScheduledEvent, ParsedTransaction
+from decimal import Decimal
 from services.reports import (
     build_last_30_days_expense_chart,
     build_last_30_days_income_chart,
@@ -358,9 +359,14 @@ def test_schema_migration_preserves_legacy_data_and_adds_columns(tmp_path):
     assert row.paid_by == 20
 
     cols = {row[1] for row in __import__("sqlite3").connect(path).execute("PRAGMA table_info(transactions)")}
-    assert {"scope", "family_id", "paid_by"} <= cols
+    assert {"scope", "family_id", "paid_by", "from_currency", "from_amount_minor", "exchange_rate", "exchange_pair_id"} <= cols
     event_cols = {row[1] for row in __import__("sqlite3").connect(path).execute("PRAGMA table_info(scheduled_events)")}
     assert {"scope", "family_id"} <= event_cols
+    user_cols = {row[1] for row in __import__("sqlite3").connect(path).execute("PRAGMA table_info(users)")}
+    assert "main_currency" in user_cols
+    with db.Session() as session:
+        user = session.execute(text("SELECT main_currency FROM users WHERE telegram_user_id=:id"), {"id": 20}).fetchone()
+    assert user.main_currency == "RUB"
 
 
 def test_schema_migration_is_idempotent(tmp_path):
@@ -431,3 +437,133 @@ def test_set_transaction_scope(tmp_path):
     assert row.family_id is None
 
     assert db.set_transaction_scope(transaction_id, 999, "family", family_id) is False
+
+
+def _exchange_message(message_id=12, days_ago=3):
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=1, type="private", title=None),
+        from_user=SimpleNamespace(id=20, username="alex", first_name="Alex", last_name=None),
+        message_id=message_id,
+        date=int((datetime.now(timezone.utc) - timedelta(days=days_ago)).timestamp()),
+        voice=None,
+    )
+
+
+def _parsed_exchange():
+    return ParsedExchange(
+        from_amount_minor=200000,
+        from_currency="USD",
+        to_currency="RUB",
+        to_amount_minor=18400000,
+        rate=Decimal("92"),
+        description="перевод долларов в рубли",
+        confidence=0.95,
+    )
+
+
+def test_create_exchange_creates_two_mirror_records_and_balances(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _exchange_message(message_id=10)
+    db.upsert_user_and_chat(message)
+
+    salary = ParsedTransaction("INCOME", 200000, "USD", "SALARY", "зарплата", 0.95)
+    db.save_transaction(message, salary, "получил зарплату две тысячи долларов", config)
+
+    exchange_message = _exchange_message(message_id=12)
+    expense_id = db.create_exchange(exchange_message, _parsed_exchange(), "перевёл 2000 долларов в рубли по курсу 92", config)
+    assert expense_id is not None
+
+    balances = db.get_balances(20)
+    assert balances["USD"] == 0
+    assert balances["RUB"] == 18400000
+
+    with db.Session() as session:
+        rows = session.query(Transaction).filter(Transaction.exchange_pair_id.is_not(None)).all()
+    assert len(rows) == 2
+    assert rows[0].exchange_pair_id == rows[1].exchange_pair_id
+    assert {row.transaction_type for row in rows} == {"EXPENSE", "INCOME"}
+    assert all(row.exchange_rate == Decimal("92") for row in rows)
+    assert all(row.from_currency == "USD" for row in rows)
+    assert all(row.from_amount_minor == 200000 for row in rows)
+
+
+def test_delete_exchange_deletes_both_mirrors(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _exchange_message(message_id=12)
+    db.upsert_user_and_chat(message)
+    expense_id = db.create_exchange(message, _parsed_exchange(), "перевёл 2000 долларов в рубли по курсу 92", config)
+
+    assert db.delete_transaction(expense_id, 20, 1) is True
+    assert db.get_balances(20) == {}
+    assert db.transaction_exists(1, 12) is False
+    assert db.transaction_exists(1, -12) is False
+
+
+def test_main_currency_default_and_set(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    message = _exchange_message()
+    db.upsert_user_and_chat(message)
+    assert db.get_main_currency(20) == "RUB"
+    assert db.set_main_currency(20, "USD") is True
+    assert db.get_main_currency(20) == "USD"
+
+
+def test_get_exchange_rates(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _exchange_message()
+    db.upsert_user_and_chat(message)
+    db.create_exchange(message, _parsed_exchange(), "перевёл 2000 долларов в рубли по курсу 92", config)
+
+    rates = db.get_exchange_rates(20)
+    assert rates == [("USD", "RUB", Decimal("92"))]
+
+
+def test_exchange_chart_converts_to_main_currency(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _exchange_message()
+    db.upsert_user_and_chat(message)
+    db.set_main_currency(20, "RUB")
+
+    expense_message = _exchange_message()
+    expense_message.message_id = 11
+    expense_message.date = int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())
+    db.save_transaction(
+        expense_message,
+        ParsedTransaction("EXPENSE", 500000, "RUB", "PRODUCTS", "продукты", 0.95),
+        "пять тысяч продукты",
+        config,
+    )
+    db.create_exchange(message, _parsed_exchange(), "перевёл 2000 долларов в рубли по курсу 92", config)
+
+    path, _caption = build_last_30_days_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+    assert path is not None
+    assert path.exists()
+
+
+def test_csv_export_includes_main_and_exchange_columns(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    message = _exchange_message(days_ago=0)
+    db.upsert_user_and_chat(message)
+    db.set_main_currency(20, "RUB")
+    db.create_exchange(message, _parsed_exchange(), "перевёл 2000 долларов в рубли по курсу 92", config)
+
+    tz = ZoneInfo("Europe/Moscow")
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=1)
+    path = export_transactions_csv_gz(db, 20, "Europe/Moscow", tmp_path, start_local, end_local, "test-period")
+
+    with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 2
+    income = next(row for row in rows if row["transaction_type"] == "INCOME")
+    assert income["currency"] == "RUB"
+    assert income["from_currency"] == "USD"
+    assert income["from_amount"] == "2000.00"
+    assert income["exchange_rate"] == "92"
+    assert income["main_currency"] == "RUB"
+    assert income["amount_main_minor"] == "18400000"

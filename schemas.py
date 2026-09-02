@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Union
@@ -35,9 +35,40 @@ class ParsedScheduledEvent:
     transaction: Optional[ParsedTransaction] = None
 
 
+@dataclass(frozen=True)
+class ParsedExchange:
+    from_amount_minor: int
+    from_currency: str
+    to_currency: str
+    to_amount_minor: Optional[int]
+    rate: Optional[Decimal]
+    description: str
+    confidence: float
+
+    def with_rate(self, rate: Decimal) -> "ParsedExchange":
+        to_amount_minor = int(round(self.from_amount_minor * rate)) if rate else None
+        return replace(self, rate=rate, to_amount_minor=to_amount_minor)
+
+
+def _parse_rate(value: object) -> Optional[Decimal]:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        rate = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if rate <= 0:
+        return None
+    return rate
+
+
 def amount_to_minor(amount: Union[str, int, float, Decimal], currency: str = "RUB") -> int:
     try:
-        decimal_amount = Decimal(str(amount).replace(",", ".")).quantize(Decimal("0.01"))
+        normalized = str(amount).replace(" ", "").replace("\u00a0", "").replace(",", ".")
+        decimal_amount = Decimal(normalized).quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError) as exc:
         raise ValidationError("parse_failed", "⚠️ Не удалось определить сумму операции.") from exc
     if decimal_amount <= 0:
@@ -57,7 +88,9 @@ def validate_deepseek_payload(
     if not payload.get("is_financial_record"):
         raise ValidationError(
             "rejected_not_financial",
-            "⚠️ Не удалось определить сумму операции.\nПримеры: «тысяча двести продукты» или «получил зарплату сто тысяч».",
+            "⚠️ Не удалось определить сумму операции.\n"
+            "Примеры: «тысяча двести продукты» или «получил зарплату сто тысяч».\n"
+            "Если это конвертация валюты, называйте обе валюты и суммы: «поменял 35 000 рублей на 150 000 армянских драм».",
         )
     if payload.get("is_multiple"):
         raise ValidationError(
@@ -100,6 +133,63 @@ def validate_deepseek_payload(
     )
 
 
+def validate_exchange_payload(
+    payload: dict,
+    transcript: str,
+    min_confidence: float,
+    category_catalog: Optional[dict] = None,
+) -> ParsedExchange:
+    if not transcript.strip():
+        raise ValidationError("transcription_failed", "⚠️ Речь не распознана.\nПовторите сообщение немного громче и короче.")
+    if not payload.get("is_financial_record"):
+        raise ValidationError(
+            "rejected_not_financial",
+            "⚠️ Не удалось определить конвертацию: назовите обе валюты и сумму в целевой валюте.\n"
+            "Пример: «поменял 35 000 рублей на 150 000 армянских драм» или «перевёл 2000 долларов в рубли по курсу 92».",
+        )
+    if payload.get("is_multiple"):
+        raise ValidationError(
+            "rejected_multiple",
+            "⚠️ В сообщении обнаружено несколько операций.\nОтправляйте каждую операцию отдельным сообщением.",
+        )
+
+    try:
+        confidence = float(payload.get("confidence", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("parse_failed", "⚠️ Не удалось разобрать ответ сервиса распознавания.") from exc
+    if confidence < min_confidence:
+        raise ValidationError("rejected_low_confidence", "⚠️ Не удалось уверенно распознать операцию.\nПовторите запись чуть яснее.")
+
+    from_currency = str(payload.get("from_currency") or "").upper()
+    to_currency = str(payload.get("to_currency") or "").upper()
+    if from_currency not in SUPPORTED_CURRENCIES or to_currency not in SUPPORTED_CURRENCIES:
+        raise ValidationError("parse_failed", "⚠️ Не удалось определить валюты конвертации.")
+    if from_currency == to_currency:
+        raise ValidationError("rejected_same_currency", "⚠️ Валюты должны отличаться.\nЭто не конвертация, а перевод.")
+
+    from_amount_minor = amount_to_minor(payload.get("from_amount", ""), from_currency)
+    rate = _parse_rate(payload.get("rate"))
+    to_amount_minor = None
+    if rate is not None:
+        to_amount_minor = int(round(from_amount_minor * rate))
+    else:
+        to_amount_text = payload.get("to_amount")
+        if to_amount_text not in (None, ""):
+            to_amount_minor = amount_to_minor(to_amount_text, to_currency)
+            rate = Decimal(to_amount_minor) / Decimal(from_amount_minor)
+    description = str(payload.get("description") or "").strip()
+
+    return ParsedExchange(
+        from_amount_minor=from_amount_minor,
+        from_currency=from_currency,
+        to_currency=to_currency,
+        to_amount_minor=to_amount_minor,
+        rate=rate,
+        description=description[:500],
+        confidence=confidence,
+    )
+
+
 def validate_voice_intent(
     payload: dict,
     transcript: str,
@@ -108,6 +198,8 @@ def validate_voice_intent(
     app_timezone: str,
 ) -> Union[ParsedTransaction, ParsedScheduledEvent]:
     action_type = str(payload.get("action_type") or "IMMEDIATE_TRANSACTION").upper()
+    if action_type == "EXCHANGE":
+        return validate_exchange_payload(payload, transcript, min_confidence, category_catalog)
     if action_type == "IMMEDIATE_TRANSACTION":
         return validate_deepseek_payload(payload, transcript, min_confidence, category_catalog)
     if action_type == "DEFERRED_EXPENSE":

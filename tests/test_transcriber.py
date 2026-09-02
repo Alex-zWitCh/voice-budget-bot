@@ -1,5 +1,9 @@
+import shutil
+import subprocess
+
 import pytest
 
+from services.audio_converter import normalize_voice
 from services.stt_transcriber import FallbackTranscriber, TranscriptionError
 
 
@@ -42,3 +46,40 @@ def test_fallback_transcriber_reports_both_errors():
         FallbackTranscriber(primary, fallback).transcribe("voice.ogg")
     assert "primary=http_503" in str(exc.value)
     assert "fallback=empty_transcript" in str(exc.value)
+
+
+def _audio_duration(path) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(result.stdout.strip())
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg/ffprobe not available")
+def test_normalize_voice_does_not_truncate_long_recording(tmp_path):
+    source = tmp_path / "long.ogg"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=12",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            str(source),
+        ],
+        check=True,
+    )
+
+    output = normalize_voice(source, tmp_path / "long_normalized.ogg", 16000, "16k")
+
+    assert _audio_duration(output) >= 10.0

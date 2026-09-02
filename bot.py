@@ -8,7 +8,7 @@ from logging.handlers import RotatingFileHandler
 import telebot
 from telebot import apihelper, types
 
-from categories import format_categories
+from categories import CURRENCY_SYMBOLS, SUPPORTED_CURRENCIES, format_categories
 from config import Config
 from database import Database
 from handlers.voice_transaction_handler import VoiceTransactionHandler
@@ -84,6 +84,18 @@ def build_bot(config: Config):
         if not _is_allowed_message(config, message):
             return
         _send_last_30_days_report(bot, db, config, message.chat.id, message.from_user.id)
+
+    @bot.message_handler(commands=["balance"])
+    def balance(message):
+        if not _is_allowed_message(config, message):
+            return
+        _send_balance(bot, db, message)
+
+    @bot.message_handler(commands=["currency"])
+    def currency(message):
+        if not _is_allowed_message(config, message):
+            return
+        _handle_currency_command(bot, db, message)
 
     @bot.message_handler(commands=["family"])
     def family(message):
@@ -240,6 +252,9 @@ def build_bot(config: Config):
             return
         if message.content_type == "text" and _handle_menu_text(bot, db, config, message, category_states):
             return
+        if message.content_type == "text" and handler.pending_exchange(message.from_user.id):
+            handler.handle_rate_reply(message)
+            return
         if message.content_type == "text" and message.from_user.id in category_states:
             state = category_states.pop(message.from_user.id)
             title = (message.text or "").strip()
@@ -360,6 +375,42 @@ def _handle_menu_text(bot, db: Database, config: Config, message, category_state
         bot.reply_to(message, commands_text(), reply_markup=_main_menu_keyboard())
         return True
     return False
+
+
+def _send_balance(bot, db: Database, message) -> None:
+    balances = db.get_balances(message.from_user.id)
+    if not balances:
+        bot.reply_to(message, "Баланс пуст. Запишите первый доход или расход.")
+        return
+    main = db.get_main_currency(message.from_user.id)
+    lines = ["💰 Баланс по валютам:"]
+    for currency in sorted(balances, key=lambda c: c != main):
+        minor = balances[currency]
+        symbol = CURRENCY_SYMBOLS.get(currency, currency)
+        amount = f"{minor / 100:,.2f}".replace(",", " ").replace(".", ",")
+        lines.append(f"{symbol} {amount} {currency}")
+    lines.append(f"\nОсновная валюта: {main}")
+    bot.reply_to(message, "\n".join(lines))
+
+
+def _handle_currency_command(bot, db: Database, message) -> None:
+    parts = (message.text or "").split()
+    user_id = message.from_user.id
+    if len(parts) < 2:
+        current = db.get_main_currency(user_id)
+        bot.reply_to(
+            message,
+            f"Основная валюта: {current}\n\nСменить: /currency <код> (например /currency USD). "
+            f"Доступно: {', '.join(sorted(SUPPORTED_CURRENCIES))}",
+        )
+        return
+    code = parts[1].upper()
+    if code not in SUPPORTED_CURRENCIES:
+        bot.reply_to(message, f"Валюта «{code}» не поддерживается. Доступно: {', '.join(sorted(SUPPORTED_CURRENCIES))}")
+        return
+    db.upsert_user_and_chat(message)
+    db.set_main_currency(user_id, code)
+    bot.reply_to(message, f"Основная валюта установлена: {CURRENCY_SYMBOLS.get(code, code)} {code}")
 
 
 def _send_last_30_days_report(bot, db: Database, config: Config, chat_id: int, telegram_user_id: int) -> None:

@@ -1,12 +1,15 @@
 import logging
 import pprint
+import re
 import time
 import uuid
 from datetime import datetime
+from dataclasses import replace
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from categories import CURRENCY_SYMBOLS, category_title
-from schemas import ParsedScheduledEvent, ValidationError, validate_voice_intent
+from schemas import ParsedExchange, ParsedScheduledEvent, ValidationError, validate_voice_intent
 from services.audio_converter import AudioConversionError, normalize_voice
 from services.deepseek_transaction_parser import DeepSeekParserError
 from services.stt_transcriber import TranscriptionError
@@ -22,10 +25,15 @@ class VoiceTransactionHandler:
         self.transcriber = transcriber
         self.parser = parser
         self.semaphore = semaphore
+        self.exchange_states = {}
 
     def handle(self, message) -> None:
         started = time.monotonic()
         if not self._is_allowed(message):
+            return
+
+        if message.from_user.id in self.exchange_states:
+            self.bot.reply_to(message, "Сначала укажите курс конвертации числом (например: 92).")
             return
 
         self.db.upsert_user_and_chat(message)
@@ -38,8 +46,8 @@ class VoiceTransactionHandler:
             self.db.record_event(message, "rejected_too_long", "too_long")
             self.bot.reply_to(
                 message,
-                f"⚠️ Голосовое сообщение длиннее {self.config.max_voice_duration_sec} секунд и не обработано.\n"
-                "Отправьте одну короткую запись дохода или расхода.",
+                f"⚠️ Сообщение слишком длинное: {message.voice.duration} сек (лимит — {self.config.max_voice_duration_sec} сек).\n"
+                "Запишите короче и отправьте ещё раз.",
             )
             return
 
@@ -130,6 +138,9 @@ class VoiceTransactionHandler:
         now_local = datetime.now(ZoneInfo(self.config.app_timezone)).isoformat(timespec="seconds")
         payload = self.parser.parse_voice_intent(transcript, category_catalog, now_local, self.config.app_timezone)
         parsed = validate_voice_intent(payload, transcript, self.config.min_deepseek_confidence, category_catalog, self.config.app_timezone)
+        if isinstance(parsed, ParsedExchange):
+            self._handle_exchange(message, started, parsed, transcript)
+            return payload
         if isinstance(parsed, ParsedScheduledEvent):
             event_id = self.db.create_scheduled_event(message, parsed, transcript, self.config)
             self.db.record_event(message, "scheduled" if event_id else "duplicate", duration_ms=int((time.monotonic() - started) * 1000))
@@ -146,6 +157,55 @@ class VoiceTransactionHandler:
                 reply_markup=_success_keyboard(transaction_id, self.db.get_family_for_user(message.from_user.id) is not None),
             )
         return payload
+
+    def pending_exchange(self, telegram_user_id: int) -> bool:
+        return telegram_user_id in self.exchange_states
+
+    def handle_rate_reply(self, message) -> bool:
+        state = self.exchange_states.pop(message.from_user.id, None)
+        if not state:
+            return False
+        if (message.text or "").lstrip().startswith("/"):
+            self.bot.reply_to(message, "Конвертация отменена.")
+            return True
+        rate = _extract_rate(message.text or "")
+        if rate is None:
+            self.exchange_states[message.from_user.id] = state
+            self.bot.reply_to(
+                message,
+                f"Не понял курс. Ответьте числом, например: {_format_amount(state['parsed'].from_amount_minor, state['parsed'].from_currency)} → {state['parsed'].to_currency}",
+            )
+            return True
+        parsed = state["parsed"].with_rate(rate)
+        self._save_exchange(message, state["transcript"], parsed)
+        return True
+
+    def _handle_exchange(self, message, started: float, parsed: ParsedExchange, transcript: str) -> None:
+        if parsed.rate is None:
+            self.exchange_states[message.from_user.id] = {"parsed": parsed, "transcript": transcript}
+            self.db.record_event(message, "rate_required", "rate_required", duration_ms=int((time.monotonic() - started) * 1000))
+            from_amount = _format_amount(parsed.from_amount_minor, parsed.from_currency)
+            self.bot.reply_to(
+                message,
+                f"📤 Конвертация: {from_amount} → {parsed.to_currency}\n"
+                "Укажите курс, по которому вы перевели деньги. Ответьте числом, например: 92",
+            )
+            return
+        self._save_exchange(message, transcript, parsed)
+
+    def _save_exchange(self, message, transcript: str, parsed: ParsedExchange) -> None:
+        expense_id = self.db.create_exchange(message, parsed, transcript, self.config)
+        self.db.record_event(message, "saved_exchange" if expense_id else "duplicate")
+        if expense_id:
+            from_amount = _format_amount(parsed.from_amount_minor, parsed.from_currency)
+            to_amount = _format_amount(parsed.to_amount_minor or 0, parsed.to_currency)
+            rate_text = f"курс {_format_rate(parsed.rate)}"
+            self.bot.reply_to(
+                message,
+                f"✅ Конвертация\n\n{from_amount} → {to_amount}\n{rate_text}\n"
+                "Созданы два перевода: расход в исходной валюте и доход в целевой.",
+                reply_markup=_delete_exchange_keyboard(expense_id),
+            )
 
     def _already_processed(self, message) -> bool:
         return self.db.transaction_exists(message.chat.id, message.message_id) or self.db.scheduled_event_exists(message.chat.id, message.message_id)
@@ -248,6 +308,34 @@ def _delete_event_keyboard(event_id: int):
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(types.InlineKeyboardButton("Удалить событие", callback_data=f"delete_event:{event_id}"))
     return keyboard
+
+
+def _delete_exchange_keyboard(expense_id: int):
+    from telebot import types
+
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Удалить запись", callback_data=f"delete_tx:{expense_id}"))
+    return keyboard
+
+
+_RATE_RE = re.compile(r"(\d{1,15}(?:[.,]\d{1,10})?)")
+
+
+def _extract_rate(text: str) -> Decimal | None:
+    match = _RATE_RE.search(text)
+    if not match:
+        return None
+    try:
+        rate = Decimal(match.group(1).replace(",", "."))
+    except InvalidOperation:
+        return None
+    return rate if rate > 0 else None
+
+
+def _format_rate(rate: Decimal | None) -> str:
+    if rate is None:
+        return "?"
+    return f"{rate.normalize():f}"
 
 
 def _truncate(value: str, limit: int) -> str:

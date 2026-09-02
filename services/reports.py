@@ -4,6 +4,7 @@ import csv
 import gzip
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,8 @@ def export_transactions_csv_gz(
     end_utc = end_local.astimezone(timezone.utc)
     rows = db.list_transactions_for_user(telegram_user_id, start_utc, end_utc)
     category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
+    main_currency = db.get_main_currency(telegram_user_id)
+    rates = _build_rate_map(db.get_exchange_rates(telegram_user_id))
 
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"transactions-{telegram_user_id}-{filename_suffix}.csv.gz"
@@ -47,6 +50,13 @@ def export_transactions_csv_gz(
                 "amount",
                 "amount_minor",
                 "currency",
+                "amount_main",
+                "amount_main_minor",
+                "main_currency",
+                "from_currency",
+                "from_amount",
+                "exchange_rate",
+                "exchange_pair_id",
                 "category_code",
                 "category_title",
                 "description",
@@ -62,6 +72,7 @@ def export_transactions_csv_gz(
             category_title = category_catalog.get(row.transaction_type, {}).get(row.category, row.category)
             date_utc = _as_utc(row.message_date_utc)
             created_utc = _as_utc(row.created_at_utc)
+            base_minor = _to_base_minor(row, main_currency, rates)
             writer.writerow(
                 [
                     row.id,
@@ -75,6 +86,13 @@ def export_transactions_csv_gz(
                     f"{row.amount_minor / 100:.2f}",
                     row.amount_minor,
                     row.currency,
+                    f"{base_minor / 100:.2f}" if base_minor is not None else "",
+                    base_minor if base_minor is not None else "",
+                    main_currency,
+                    row.from_currency or "",
+                    f"{row.from_amount_minor / 100:.2f}" if row.from_amount_minor is not None else "",
+                    _format_exchange_rate(row.exchange_rate),
+                    row.exchange_pair_id if row.exchange_pair_id is not None else "",
                     row.category,
                     category_title,
                     row.description,
@@ -184,24 +202,27 @@ def build_category_chart(
 ) -> tuple[Path | None, str]:
     rows = db.list_transactions_for_user(telegram_user_id, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc))
     category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
+    main_currency = db.get_main_currency(telegram_user_id)
+    rates = _build_rate_map(db.get_exchange_rates(telegram_user_id))
 
     totals: dict[tuple[str, str], int] = defaultdict(int)
-    currency = "RUB"
     for row in rows:
         if row.transaction_type != transaction_type:
             continue
-        currency = row.currency
+        base_minor = _to_base_minor(row, main_currency, rates)
+        if base_minor is None:
+            continue
         title = category_catalog.get(transaction_type, {}).get(row.category, row.category)
-        totals[(row.category, title)] += row.amount_minor
+        totals[(row.category, title)] += base_minor
 
     if not totals:
-        return None, empty_text
+        return None, f"{empty_text} В основной валюте {main_currency} операций не найдено."
 
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "expenses" if transaction_type == "EXPENSE" else "income"
     title = "Расходы" if transaction_type == "EXPENSE" else "Доходы"
     path = output_dir / f"{prefix}-{telegram_user_id}-{filename_suffix}.png"
-    _render_pie_chart(path, totals, currency, period_title, title)
+    _render_pie_chart(path, totals, main_currency, period_title, title)
     return path, caption
 
 
@@ -210,6 +231,47 @@ def previous_month_period(app_timezone: str, now_local: datetime | None = None) 
     now_local = now_local or datetime.now(tz)
     start_local, end_local = _previous_month_range(now_local)
     return start_local, end_local, start_local.strftime("%Y-%m")
+
+
+def _build_rate_map(rates_rows: list[tuple[str, str, Decimal]]) -> dict[tuple[str, str], Decimal]:
+    rates: dict[tuple[str, str], Decimal] = {}
+    for from_currency, to_currency, rate in rates_rows:
+        rates[(from_currency, to_currency)] = rate
+    return rates
+
+
+def _format_exchange_rate(rate) -> str:
+    if rate is None:
+        return ""
+    return format(Decimal(str(rate)).normalize(), "f")
+
+
+def _rate_lookup(currency_from: str, currency_to: str, rates: dict[tuple[str, str], Decimal]) -> Decimal | None:
+    if currency_from == currency_to:
+        return Decimal(1)
+    direct = rates.get((currency_from, currency_to))
+    if direct is not None:
+        return direct
+    reverse = rates.get((currency_to, currency_from))
+    if reverse is not None:
+        return Decimal(1) / reverse
+    return None
+
+
+def _to_base_minor(row, main_currency: str, rates: dict[tuple[str, str], Decimal]) -> int | None:
+    """Переводит сумму записи в основную валюту через сохранённые курсы конвертаций."""
+    if row.currency == main_currency and row.exchange_rate is None:
+        return row.amount_minor
+    if row.exchange_rate is not None and row.from_currency and row.transaction_type == "INCOME":
+        anchor_currency = row.from_currency
+        anchor_minor = row.amount_minor / Decimal(str(row.exchange_rate))
+    else:
+        anchor_currency = row.currency
+        anchor_minor = row.amount_minor
+    factor = _rate_lookup(anchor_currency, main_currency, rates)
+    if factor is None:
+        return None
+    return int(round(anchor_minor * factor))
 
 
 def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: str, period: str, title: str) -> None:

@@ -1,6 +1,7 @@
 import pytest
+from decimal import Decimal
 
-from schemas import ValidationError, amount_to_minor, validate_deepseek_payload
+from schemas import ValidationError, amount_to_minor, validate_deepseek_payload, validate_exchange_payload, validate_voice_intent
 
 
 def test_amount_to_minor_uses_decimal_not_float():
@@ -123,3 +124,103 @@ def test_rejections(payload, error_code):
     with pytest.raises(ValidationError) as exc:
         validate_deepseek_payload(payload, "текст", 0.7)
     assert exc.value.code == error_code
+
+
+EXCHANGE_PAYLOAD = {
+    "action_type": "EXCHANGE",
+    "is_financial_record": True,
+    "is_multiple": False,
+    "from_amount": "2000",
+    "from_currency": "USD",
+    "to_currency": "RUB",
+    "rate": 92,
+    "description": "перевод долларов в рубли",
+    "confidence": 0.95,
+}
+
+
+def test_validate_exchange_with_rate():
+    parsed = validate_exchange_payload(EXCHANGE_PAYLOAD, "перевёл 2000 долларов в рубли по курсу 92", 0.7)
+    assert parsed.from_amount_minor == 200000
+    assert parsed.from_currency == "USD"
+    assert parsed.to_currency == "RUB"
+    assert parsed.to_amount_minor == 18400000
+    assert str(parsed.rate) == "92"
+
+
+def test_validate_exchange_without_rate_requests_dialog():
+    payload = {**EXCHANGE_PAYLOAD, "rate": None}
+    parsed = validate_exchange_payload(payload, "перевёл 2000 долларов в рубли", 0.7)
+    assert parsed.rate is None
+    assert parsed.to_amount_minor is None
+
+
+def test_validate_exchange_with_to_amount_computes_rate():
+    payload = {
+        **EXCHANGE_PAYLOAD,
+        "rate": None,
+        "from_amount": "2000",
+        "from_currency": "USD",
+        "to_currency": "AMD",
+        "to_amount": "100 000",
+    }
+    parsed = validate_exchange_payload(payload, "поменял 2000 долларов на 100 000 армянских драм", 0.7)
+    assert parsed.from_amount_minor == 200000
+    assert parsed.to_currency == "AMD"
+    assert parsed.to_amount_minor == 10000000
+    assert parsed.rate == Decimal("50")
+
+
+def test_validate_exchange_neither_rate_nor_to_amount_requests_dialog():
+    payload = {**EXCHANGE_PAYLOAD, "rate": None, "to_amount": None}
+    parsed = validate_exchange_payload(payload, "перевёл 2000 долларов", 0.7)
+    assert parsed.rate is None
+    assert parsed.to_amount_minor is None
+
+
+def test_validate_exchange_rate_takes_precedence_over_to_amount():
+    payload = {**EXCHANGE_PAYLOAD, "rate": 92, "to_amount": "99999999"}
+    parsed = validate_exchange_payload(payload, "перевёл 2000 долларов в рубли по курсу 92", 0.7)
+    assert parsed.to_amount_minor == 18400000
+    assert str(parsed.rate) == "92"
+
+
+def test_amount_to_minor_accepts_spaces():
+    assert amount_to_minor("100 000") == 10000000
+    assert amount_to_minor("100 000,50") == 10000050
+
+
+def test_validate_exchange_same_currency_rejected():
+    payload = {**EXCHANGE_PAYLOAD, "to_currency": "USD"}
+    with pytest.raises(ValidationError) as exc:
+        validate_exchange_payload(payload, "перевёл доллары в доллары", 0.7)
+    assert exc.value.code == "rejected_same_currency"
+
+
+def test_validate_exchange_unsupported_currency_rejected():
+    payload = {**EXCHANGE_PAYLOAD, "to_currency": "XYZ"}
+    with pytest.raises(ValidationError) as exc:
+        validate_exchange_payload(payload, "перевёл в XYZ", 0.7)
+    assert exc.value.code == "parse_failed"
+
+
+def test_validate_exchange_zero_rate_is_missing_rate():
+    parsed = validate_exchange_payload({**EXCHANGE_PAYLOAD, "rate": 0}, "перевёл 2000 долларов в рубли", 0.7)
+    assert parsed.rate is None
+
+
+def test_validate_voice_intent_dispatches_exchange():
+    from schemas import ParsedExchange
+
+    parsed = validate_voice_intent(EXCHANGE_PAYLOAD, "перевёл 2000 долларов в рубли по курсу 92", 0.7, None, "Europe/Moscow")
+    assert isinstance(parsed, ParsedExchange)
+    assert parsed.from_amount_minor == 200000
+    assert parsed.to_amount_minor == 18400000
+
+
+def test_exchange_with_rate_computes_to_amount():
+    from schemas import ParsedExchange
+
+    parsed = validate_exchange_payload(EXCHANGE_PAYLOAD, "фраза", 0.7)
+    assert isinstance(parsed, ParsedExchange)
+    assert parsed.to_amount_minor == 18400000

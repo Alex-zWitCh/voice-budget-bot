@@ -5,6 +5,27 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Multi-currency tracking: transactions keep their own currency and amounts in
+  integer minor units; new `EXCHANGE` intent converts money between currencies at a
+  user-specified rate.
+- Currency conversion: "перевёл 2000 долларов в рубли по курсу 92" creates two
+  mirror records (expense in the source currency and income in the target currency,
+  category `TRANSFERS`) linked by `exchange_pair_id`, both storing the applied
+  `exchange_rate` and `from_currency`/`from_amount_minor` for future analysis.
+- Two ways to declare a conversion: with an explicit rate, or with both amounts
+  ("поменял 2000 долларов на 100 000 армянских драм") — the bot computes the rate
+  itself. New currency `AMD` (Armenian dram) is supported.
+- If neither the rate nor the resulting amount is mentioned, the bot asks for the
+  rate in a short dialog (the pending conversion is completed when the user replies
+  with a number).
+- `/balance` — running balance per currency (`INCOME - EXPENSE`, conversions move
+  money between currencies automatically).
+- `/currency [CODE]` — show or change the user's main currency (stored on `users.main_currency`).
+- Reports in a main currency: expense/income pie charts convert every operation to
+  the user's main currency using stored exchange rates (mirror records and the most
+  recent rate for the pair). Detailed CSV export now includes the original amount
+  and currency plus `amount_main`/`main_currency`, `from_currency`, `from_amount`,
+  `exchange_rate`, `exchange_pair_id`.
 - Family layer: `families` and `family_members` tables, `/family` (create/status),
   `/family create <name>`, `/family invite` (invite code), `/join <code>`.
 - Transaction scope: `scope = personal | family`, `family_id`, `paid_by` columns on
@@ -24,7 +45,11 @@ All notable changes to Voice Budget Bot will be documented in this file.
 - Applied the existing optional `ALLOWED_USER_IDS`/`ALLOWED_CHAT_IDS` access primitive consistently to commands and inline buttons.
 
 ### Changed
-- Default maximum voice-message duration is 16 seconds.
+- Fixed: voice normalization no longer truncates recordings to 8 seconds (`-t 8` in
+  the ffmpeg command was silently cutting every message); the full voice message is
+  now re-encoded and recognized. Long recordings kept losing their tail (e.g. the
+  target "… на 140 000 драм" in a currency conversion).
+- Default maximum voice-message duration is now 20 seconds.
 - Removed the manual `/export` command; detailed CSV export is now included in the automatic monthly report bundle.
 
 ## [1.0.0] - 2026-07-22

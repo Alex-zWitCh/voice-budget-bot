@@ -14,9 +14,36 @@ SYSTEM_PROMPT_TEMPLATE = """Ты выполняешь строгое извле�
 Намерение может быть:
 - IMMEDIATE_TRANSACTION: обычный доход или расход сейчас;
 - DEFERRED_EXPENSE: расход, который нужно автоматически зафиксировать в будущем;
-- REMINDER: напоминание с текстом.
+- REMINDER: напоминание с текстом;
+- EXCHANGE: конвертация денег из одной валюты в другую.
 
 Верни только валидный JSON без Markdown и пояснений.
+
+Формат конвертации валюты (курс назван):
+{{
+  "action_type": "EXCHANGE",
+  "is_financial_record": true,
+  "is_multiple": false,
+  "from_amount": "2000.00",
+  "from_currency": "USD",
+  "to_currency": "RUB",
+  "rate": 92.0,
+  "description": "перевод долларов в рубли",
+  "confidence": 0.95
+}}
+
+Формат конвертации валюты (обе суммы названы, курс не назван):
+{{
+  "action_type": "EXCHANGE",
+  "is_financial_record": true,
+  "is_multiple": false,
+  "from_amount": "2000.00",
+  "from_currency": "USD",
+  "to_currency": "AMD",
+  "to_amount": "100000.00",
+  "description": "поменял доллары на драмы",
+  "confidence": 0.95
+}}
 
 Формат обычной операции:
 {{
@@ -64,6 +91,18 @@ SYSTEM_PROMPT_TEMPLATE = """Ты выполняешь строгое извле�
 - одна фраза должна содержать ровно одно намерение;
 - если сказано "напомни", "напомнить", "поздравь", "не забыть" — это REMINDER;
 - если сказано что расход будет/спишется/нужно списать в будущем — это DEFERRED_EXPENSE;
+- если деньги переводятся из одной валюты в другую ("перевёл/конвертировал/обменял/поменял N <валюта> в/на <валюта>") — это EXCHANGE;
+- для EXCHANGE укажи from_amount, from_currency, to_currency; если курс назван ("по курсу R") — укажи rate числом;
+  если названы обе суммы и курс не назван — укажи to_amount (сколько получилось в целевой валюте) и оставь rate = null;
+  если не названы ни курс, ни сумма в целевой валюте — и rate, и to_amount = null;
+- сумма в целевой валюте считается известной только вместе с её валютой: «на 140 драм» — это to_amount="140", to_currency="AMD";
+  если валюта суммы не названа («на 140») — to_amount определить нельзя, верни is_financial_record=false;
+- если валюты совпадают, это не конвертация, а IMMEDIATE_TRANSACTION с категорией TRANSFERS;
+- названия валют: рубли/рубль/руб/₽/RUB — RUB, доллары/баксы/$/USD — USD, евро/€/EUR — EUR,
+  фунты/GBP — GBP, юани/CNY — CNY, сумы/UZS — UZS, тенге/KZT — KZT, драм/драмы/драммах/AMD — AMD;
+- при распознавании речи «драм» часто звучит как «грамм», «грам», «драмм» — в контексте конвертации
+  («поменял/перевёл X рублей на Y грамм») считай это драм (AMD);
+- EXCHANGE выполняет правило курса: 1 единица from_currency = rate единиц to_currency;
 - если дата указана без года, выбери ближайшую будущую дату;
 - если указано "через N дней", прибавь N дней к текущей дате;
 - если для напоминания указано время события, notify_at ставь за 30 минут до event_at;
@@ -139,6 +178,15 @@ class DeepSeekTransactionParser:
         }
         reminder_keys = {"action_type", "title", "event_at", "notify_at", "recurrence", "confidence"}
         deferred_keys = required_keys | {"action_type", "event_at", "notify_at", "recurrence", "title"}
+        exchange_keys = {
+            "action_type",
+            "is_financial_record",
+            "is_multiple",
+            "from_amount",
+            "from_currency",
+            "to_currency",
+            "confidence",
+        }
         for attempt in range(3):
             try:
                 response = requests.post(self.api_url, headers=headers, json=payload, timeout=self.timeout_sec)
@@ -149,6 +197,8 @@ class DeepSeekTransactionParser:
                 content = response.json()["choices"][0]["message"]["content"].strip()
                 parsed = json.loads(_strip_json(content))
                 action_type = str(parsed.get("action_type") or "IMMEDIATE_TRANSACTION").upper()
+                if action_type == "EXCHANGE" and exchange_keys.issubset(parsed):
+                    return parsed
                 if action_type == "REMINDER" and reminder_keys.issubset(parsed):
                     return parsed
                 if action_type == "DEFERRED_EXPENSE" and deferred_keys.issubset(parsed):

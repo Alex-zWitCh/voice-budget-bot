@@ -58,7 +58,7 @@ class Config:
             bot_token=os.getenv("BOT_TOKEN", ""),
             allowed_chat_ids=_csv_ints(os.getenv("ALLOWED_CHAT_IDS", "")),
             allowed_user_ids=_csv_ints(os.getenv("ALLOWED_USER_IDS", "")),
-            max_voice_duration_sec=int(os.getenv("MAX_VOICE_DURATION_SEC", "16")),
+            max_voice_duration_sec=int(os.getenv("MAX_VOICE_DURATION_SEC", "20")),
             stt_base_url=os.getenv("STT_BASE_URL", "https://stt.example.com:7443/v1"),
             stt_api_key=os.getenv("STT_API_KEY", ""),
             stt_model=os.getenv("STT_MODEL", "Systran/faster-whisper-large-v3"),

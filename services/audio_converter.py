@@ -13,8 +13,6 @@ def normalize_voice(input_path: Path, output_path: Path, sample_rate: int, bitra
         "-y",
         "-i",
         str(input_path),
-        "-t",
-        "8",
         "-ac",
         "1",
         "-ar",

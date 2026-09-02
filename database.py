@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from categories import CATEGORY_BY_TYPE
+from schemas import ParsedTransaction
 
 INVITE_CODE_TTL = timedelta(hours=24)
 
@@ -26,6 +28,7 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(255))
     first_name: Mapped[Optional[str]] = mapped_column(String(255))
     last_name: Mapped[Optional[str]] = mapped_column(String(255))
+    main_currency: Mapped[str] = mapped_column(String(3), default="RUB")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -65,6 +68,10 @@ class Transaction(Base):
     scope: Mapped[str] = mapped_column(String(16), default="personal", index=True)
     family_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
     paid_by: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    from_currency: Mapped[Optional[str]] = mapped_column(String(3))
+    from_amount_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    exchange_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 10))
+    exchange_pair_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
 
 
 class Family(Base):
@@ -176,10 +183,17 @@ class Database:
     def _run_schema_migrations(self) -> None:
         with self.engine.begin() as connection:
             migrations = {
+                "users": {
+                    "main_currency": "VARCHAR(3) NOT NULL DEFAULT 'RUB'",
+                },
                 "transactions": {
                     "scope": "VARCHAR(16) NOT NULL DEFAULT 'personal'",
                     "family_id": "INTEGER",
                     "paid_by": "BIGINT",
+                    "from_currency": "VARCHAR(3)",
+                    "from_amount_minor": "BIGINT",
+                    "exchange_rate": "NUMERIC(20, 10)",
+                    "exchange_pair_id": "INTEGER",
                 },
                 "scheduled_events": {
                     "scope": "VARCHAR(16) NOT NULL DEFAULT 'personal'",
@@ -265,6 +279,10 @@ class Database:
         scope: str = "personal",
         family_id: Optional[int] = None,
         paid_by: Optional[int] = None,
+        exchange_rate: Optional[Decimal] = None,
+        from_currency: Optional[str] = None,
+        from_amount_minor: Optional[int] = None,
+        exchange_pair_id: Optional[int] = None,
     ) -> Optional[int]:
         tx = Transaction(
             telegram_chat_id=telegram_chat_id,
@@ -285,6 +303,10 @@ class Database:
             scope=scope,
             family_id=family_id,
             paid_by=paid_by or telegram_user_id,
+            from_currency=from_currency,
+            from_amount_minor=from_amount_minor,
+            exchange_rate=exchange_rate,
+            exchange_pair_id=exchange_pair_id,
         )
         try:
             with self.Session.begin() as session:
@@ -294,6 +316,68 @@ class Database:
         except IntegrityError:
             return None
         return transaction_id
+
+    def create_exchange(self, message, parsed, transcript: str, config) -> Optional[int]:
+        """Создаёт две зеркальные записи конвертации и возвращает id записи-расхода.
+
+        Расход в исходной валюте и доход в целевой валюте (категория TRANSFERS)
+        связываются через exchange_pair_id и хранят применённый курс.
+        """
+        voice = getattr(message, "voice", None)
+        message_date_utc = datetime.fromtimestamp(message.date, timezone.utc)
+        message_id = message.message_id
+        rate = parsed.rate
+        if rate is None:
+            return None
+        with self.Session.begin() as session:
+            pair_id = session.execute(text("SELECT COALESCE(MAX(exchange_pair_id), 0) + 1 FROM transactions")).scalar()
+        pair_id = int(pair_id)
+
+        expense = ParsedTransaction(
+            transaction_type="EXPENSE",
+            amount_minor=parsed.from_amount_minor,
+            currency=parsed.from_currency,
+            category="TRANSFERS",
+            description=parsed.description,
+            confidence=parsed.confidence,
+        )
+        income = ParsedTransaction(
+            transaction_type="INCOME",
+            amount_minor=parsed.to_amount_minor or 0,
+            currency=parsed.to_currency,
+            category="TRANSFERS",
+            description=parsed.description,
+            confidence=parsed.confidence,
+        )
+        expense_id = self.create_transaction(
+            telegram_chat_id=message.chat.id,
+            telegram_message_id=message_id,
+            telegram_user_id=message.from_user.id,
+            parsed=expense,
+            transcript=transcript,
+            message_date_utc=message_date_utc,
+            voice_duration_sec=voice.duration if voice else 0,
+            config=config,
+            exchange_rate=rate,
+            from_currency=parsed.from_currency,
+            from_amount_minor=parsed.from_amount_minor,
+            exchange_pair_id=pair_id,
+        )
+        income_id = self.create_transaction(
+            telegram_chat_id=message.chat.id,
+            telegram_message_id=-message_id,
+            telegram_user_id=message.from_user.id,
+            parsed=income,
+            transcript=transcript,
+            message_date_utc=message_date_utc,
+            voice_duration_sec=voice.duration if voice else 0,
+            config=config,
+            exchange_rate=rate,
+            from_currency=parsed.from_currency,
+            from_amount_minor=parsed.from_amount_minor,
+            exchange_pair_id=pair_id,
+        )
+        return expense_id if expense_id else income_id
 
     def create_scheduled_event(self, message, event, transcript: str, config) -> Optional[int]:
         scheduled = ScheduledEvent(
@@ -390,6 +474,13 @@ class Database:
             )
             if not row:
                 return False
+            if row.exchange_pair_id is not None:
+                session.query(Transaction).filter_by(
+                    exchange_pair_id=row.exchange_pair_id,
+                    telegram_user_id=telegram_user_id,
+                    telegram_chat_id=telegram_chat_id,
+                ).delete(synchronize_session=False)
+                return True
             session.delete(row)
             return True
 
@@ -544,6 +635,48 @@ class Database:
         except IntegrityError:
             return False
         return True
+
+    # ---- Main currency & balances ----
+
+    def get_main_currency(self, telegram_user_id: int) -> str:
+        with self.Session() as session:
+            user = session.query(User).filter_by(telegram_user_id=telegram_user_id).first()
+            return user.main_currency if user else "RUB"
+
+    def set_main_currency(self, telegram_user_id: int, code: str) -> bool:
+        with self.Session.begin() as session:
+            user = session.query(User).filter_by(telegram_user_id=telegram_user_id).first()
+            if not user:
+                return False
+            user.main_currency = code
+            return True
+
+    def get_exchange_rates(self, telegram_user_id: int) -> list[tuple[str, str, Decimal]]:
+        """Возвращает курсы конвертаций: (from_currency, to_currency, rate) от старых к новым."""
+        with self.Session() as session:
+            rows = (
+                session.query(Transaction.from_currency, Transaction.currency, Transaction.exchange_rate)
+                .filter(
+                    Transaction.telegram_user_id == telegram_user_id,
+                    Transaction.transaction_type == "INCOME",
+                    Transaction.exchange_pair_id.is_not(None),
+                    Transaction.exchange_rate.is_not(None),
+                )
+                .order_by(Transaction.created_at_utc.asc())
+                .all()
+            )
+        return [(row.from_currency, row.currency, Decimal(str(row.exchange_rate))) for row in rows]
+
+    def get_balances(self, telegram_user_id: int) -> dict[str, int]:
+        balances: dict[str, int] = {}
+        with self.Session() as session:
+            rows = session.query(Transaction.currency, Transaction.transaction_type, Transaction.amount_minor).filter_by(
+                telegram_user_id=telegram_user_id
+            )
+            for currency, transaction_type, amount_minor in rows:
+                delta = amount_minor if transaction_type == "INCOME" else -amount_minor
+                balances[currency] = balances.get(currency, 0) + delta
+        return balances
 
     # ---- Families ----
 
