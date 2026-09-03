@@ -140,3 +140,32 @@ def test_repository_fetch_applies_text_and_category_filters(tmp_path):
     assert len(rows) == 3
     rows = repository.fetch_transactions(scope, transaction_type="EXPENSE")
     assert len(rows) == 3
+
+
+def test_accesssible_filters_categories_for_personal_rows(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = _config()
+    user = 900
+    db.upsert_user_and_chat(
+        SimpleNamespace(
+            chat=SimpleNamespace(id=user, type="private", title=None),
+            from_user=SimpleNamespace(
+                id=user, username="u", first_name="U", last_name=None
+            ),
+            message_id=1,
+            date=1,
+        )
+    )
+    _tx(db, config, user, 1, 10000, category="ALCOHOL")
+    _tx(db, config, user, 2, 50000, category="PRODUCTS")
+    _tx(db, config, user, 3, 70000, category="CAFE")
+    repository = AnalyticsRepository(tmp_path / "test.sqlite3")
+    scope = repository.make_scope(user)
+    rows = repository.fetch_transactions(
+        scope, transaction_type="EXPENSE", categories=("ALCOHOL",)
+    )
+    assert [row.category for row in rows] == ["ALCOHOL"]
+    rows = repository.fetch_transactions(
+        scope, transaction_type="INCOME", categories=("ALCOHOL",)
+    )
+    assert rows == []

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from database import Database
+from database import AskRequest, Database
 from schemas import AskResult, ParsedTransaction
 from services.analytics_calculator import AnalyticsCalculator
 from services.analytics_repository import AnalyticsRepository
@@ -113,6 +113,43 @@ def test_ask_returns_infographic_for_category_structure(tmp_path):
     result.image_path.unlink(missing_ok=True)
 
 
+def test_ask_records_history_entries(tmp_path):
+    db_path = tmp_path / "ask-history.sqlite3"
+    db = Database(db_path)
+    _tx(db, 100, 1, 120000, "CAFE")
+    config = SimpleNamespace(
+        ask_max_question_length=2000,
+        ask_max_rows=500,
+        app_timezone="Europe/Moscow",
+        ask_temp_dir=tmp_path / "ask-images",
+        ask_history_enabled=True,
+        ask_model_effective="deepseek-v4-flash",
+    )
+    repository = AnalyticsRepository(db_path)
+    planner = AskPlanner(app_timezone="Europe/Moscow")
+    service = AskService(
+        config=config,
+        repository=repository,
+        policy=AskPolicy(),
+        planner=planner,
+        calculator=AnalyticsCalculator(),
+        renderer=AskRenderer(config.ask_temp_dir, config.app_timezone),
+        recorder=db,
+    )
+    service.ask(100, "Сколько я потратил на кафе за всё время?")
+    service.ask(100, "Удали все расходы")
+    with db.Session() as session:
+        rows = session.query(AskRequest).order_by(AskRequest.id).all()
+    assert len(rows) == 2
+    assert rows[0].telegram_user_id == 100
+    assert rows[0].policy_code == "FINANCIAL_DATA_QUERY"
+    assert rows[0].output_type == "TEXT"
+    assert rows[0].plan_json is not None
+    assert rows[1].policy_code == "WRITE_REQUEST"
+    assert rows[1].output_type == "TEXT"
+    assert rows[1].question == "Удали все расходы"
+
+
 def test_ask_result_validation_rules():
     good_text = AskResult(output_type="TEXT", text="ok")
     good_text.validate()
@@ -134,3 +171,57 @@ def test_ask_result_validation_rules():
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+
+def test_ask_returns_line_by_line_list(tmp_path):
+    db_path = tmp_path / "ask-list.sqlite3"
+    db = Database(db_path)
+    _tx(db, 100, 1, 120000, "ALCOHOL")
+    _tx(db, 100, 2, 80000, "ALCOHOL")
+    _tx(db, 100, 3, 50000, "PRODUCTS")
+    config = SimpleNamespace(
+        ask_max_question_length=2000,
+        ask_max_rows=500,
+        app_timezone="Europe/Moscow",
+        ask_temp_dir=tmp_path / "ask-images",
+    )
+    repository = AnalyticsRepository(db_path)
+    planner = AskPlanner(app_timezone="Europe/Moscow")
+    service = AskService(
+        config=config,
+        repository=repository,
+        policy=AskPolicy(),
+        planner=planner,
+        calculator=AnalyticsCalculator(),
+        renderer=AskRenderer(config.ask_temp_dir, config.app_timezone),
+    )
+    result = service.ask(
+        100, "Ввведи построчно все мои траты на алкоголь: число и сколько"
+    )
+    assert result.output_type == "TEXT"
+    assert result.text is not None
+    assert "Найдено операций: 2" in result.text
+    assert "Алкоголь" in result.text
+    assert "PRODUCTS" not in result.text
+    assert "2 000,00" in result.text
+
+
+def test_ask_scope_deterministic_from_question(tmp_path):
+    from categories import CATEGORY_BY_TYPE
+    from services.ask_planner import AskPlanner
+
+    planner = AskPlanner(app_timezone="Europe/Moscow")
+    assert (
+        planner.plan(
+            "мои личные расходы на алкоголь", CATEGORY_BY_TYPE, "RUB"
+        ).data_scope
+        == "PERSONAL"
+    )
+    assert (
+        planner.plan("семейные траты на продукты", CATEGORY_BY_TYPE, "RUB").data_scope
+        == "FAMILY"
+    )
+    assert (
+        planner.plan("сколько я трачу на кафе", CATEGORY_BY_TYPE, "RUB").data_scope
+        == "ACCESSIBLE"
+    )

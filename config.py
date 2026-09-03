@@ -62,6 +62,7 @@ class Config:
     ask_max_voice_duration_sec: int
     ask_max_concurrent_processing: int
     ask_temp_dir: Path
+    ask_history_enabled: bool
 
     @property
     def ask_api_key_effective(self) -> str:
@@ -127,6 +128,7 @@ class Config:
             ask_max_voice_duration_sec=int(os.getenv("ASK_MAX_VOICE_DURATION_SEC", "60")),
             ask_max_concurrent_processing=int(os.getenv("ASK_MAX_CONCURRENT_PROCESSING", "1")),
             ask_temp_dir=Path(os.getenv("ASK_TEMP_DIR", "/tmp/voice-budget-bot/ask")),
+            ask_history_enabled=os.getenv("ASK_HISTORY_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
         )
 
     def validate(self) -> None:

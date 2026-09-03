@@ -25,6 +25,7 @@ from schemas import (
     ASK_METRIC_COUNT,
 )
 from services.analytics_calculator import CalculationResult, RUSSIAN_MONTHS
+from services.currency_conversion import symbol_for
 
 RUSSIAN_MONTHS_GENITIVE = {
     1: "января",
@@ -358,3 +359,46 @@ class AskRenderer:
             )
         lines.append(f"\nУчтены {scope_note}.")
         return "\n".join(lines)
+
+
+def _compact_money(amount_minor: int, currency: str) -> str:
+    symbol = CURRENCY_SYMBOLS.get(currency, currency)
+    whole, fraction = divmod(amount_minor, 100)
+    text = f"{whole:,}".replace(",", " ")
+    if fraction:
+        text = f"{text},{fraction:02d}"
+    return f"{text} {symbol}"
+
+
+def build_list_text(
+    rows,
+    category_titles: dict[str, str],
+    currency: str,
+    total_minor: Optional[int],
+    unconverted: dict[str, int],
+    app_timezone: str,
+    limit: int = 60,
+) -> str:
+    tz = ZoneInfo(app_timezone)
+    lines = [f"Найдено операций: {len(rows)}."]
+    for row in rows[:limit]:
+        local_date = row.message_date_utc.astimezone(tz).strftime("%d.%m.%Y")
+        category = category_titles.get(row.category, row.category)
+        scope_label = "Семейное" if row.scope == "family" else "Личное"
+        description = (row.description or "").strip()
+        detail = f" — {description}" if description else ""
+        lines.append(
+            f"{local_date}  {_compact_money(row.amount_minor, row.currency)} · {category}{detail} · {scope_label}"
+        )
+    if len(rows) > limit:
+        lines.append(f"…и ещё {len(rows) - limit} операций.")
+    if total_minor is not None and len(rows):
+        lines.append(f"Сумма (в {currency}): {format_minor(total_minor, currency)}")
+    if unconverted:
+        skipped = ", ".join(
+            f"{count} в {symbol_for(code)}" for code, count in unconverted.items()
+        )
+        lines.append(
+            f"⚠️ Часть операций не приведена к {currency} из-за отсутствия сохранённого курса ({skipped})."
+        )
+    return "\n".join(lines)

@@ -139,6 +139,7 @@ def build_bot(config: Config):
         calculator=AnalyticsCalculator(),
         renderer=AskRenderer(config.ask_temp_dir, config.app_timezone),
         llm_client=ask_llm_client,
+        recorder=db,
     )
     ask_semaphore = threading.BoundedSemaphore(config.ask_max_concurrent_processing)
     ask_voice_handler = AskVoiceHandler(bot, config, transcriber, ask_service, ask_semaphore)

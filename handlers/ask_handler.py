@@ -71,7 +71,7 @@ class AskVoiceHandler:
                 )
                 return
             self.bot.reply_to(message, "🤖 Анализирую ваши данные…")
-            result = self.ask_service.ask(message.from_user.id, transcript)
+            result = self.ask_service.ask(message.from_user.id, transcript, source="voice")
             send_ask_result(self.bot, message.chat.id, result)
         except AudioConversionError:
             logger.warning(

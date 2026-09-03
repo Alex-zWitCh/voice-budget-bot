@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import defaultdict, deque
@@ -30,6 +31,7 @@ from services.ask_policy import (
 )
 from services.ask_renderer import (
     AskRenderer,
+    build_list_text,
     format_minor,
     period_description,
     scope_description,
@@ -41,6 +43,17 @@ logger = logging.getLogger(__name__)
 
 RATE_LIMIT_PER_MINUTE = 10
 RATE_LIMIT_WINDOW_SEC = 60
+
+_LIST_MARKERS = (
+    "построчно",
+    "перечисли",
+    "списком",
+    "все операции",
+    "выведи все",
+    "покажи все",
+    "каждую запись",
+    "по каждой операции",
+)
 
 POLICY_MESSAGES = {
     POLICY_WRITE: "Я могу только анализировать данные.\nИзменение, создание и удаление записей через /ask запрещено.",
@@ -65,6 +78,7 @@ class AskService:
         calculator: AnalyticsCalculator,
         renderer: AskRenderer,
         llm_client: Optional[AskLLMClient] = None,
+        recorder: Optional = None,
     ):
         self.config = config
         self.repository = repository
@@ -73,45 +87,115 @@ class AskService:
         self.calculator = calculator
         self.renderer = renderer
         self.llm_client = llm_client
+        self.recorder = recorder
         self._history: dict[int, deque[float]] = defaultdict(deque)
 
-    def ask(self, telegram_user_id: int, question: str) -> AskResult:
+    def ask(
+        self, telegram_user_id: int, question: str, source: str = "text"
+    ) -> AskResult:
         started = time.monotonic()
-        outcome = "ask_rejected"
+        trace = {
+            "telegram_user_id": telegram_user_id,
+            "source": source,
+            "question": (question or "").strip(),
+            "policy_code": "FINANCIAL",
+            "plan_json": None,
+            "rows_fetched": None,
+            "was_narrowed": None,
+            "output_type": None,
+            "duration_ms": None,
+            "error_code": None,
+        }
         try:
-            result = self._ask(telegram_user_id, question)
-            outcome = (
-                "ask_completed"
-                if result.output_type in {ASK_OUTPUT_TEXT, ASK_OUTPUT_INFOGRAPHIC}
-                else "ask_rejected"
-            )
+            result = self._ask(telegram_user_id, trace)
+            trace["output_type"] = result.output_type
             return result
-        finally:
-            logger.info(
-                "ask_finished user_id=%s outcome=%s duration_ms=%s",
+        except Exception:
+            trace.setdefault("error_code", "exception")
+            trace.setdefault("output_type", None)
+            logger.exception(
+                "ask_failed user_id=%s question_len=%s",
                 telegram_user_id,
-                outcome,
-                int((time.monotonic() - started) * 1000),
+                len(trace["question"]),
+            )
+            raise
+        finally:
+            trace["duration_ms"] = int((time.monotonic() - started) * 1000)
+            logger.info(
+                "ask_finished user_id=%s outcome=%s duration_ms=%s error=%s",
+                telegram_user_id,
+                trace["output_type"] or "error",
+                trace["duration_ms"],
+                trace.get("error_code"),
+            )
+            self._persist(trace)
+
+    def _persist(self, trace: dict) -> None:
+        if not self.recorder or not getattr(self.config, "ask_history_enabled", True):
+            return
+        try:
+            self.recorder.record_ask(
+                telegram_user_id=trace["telegram_user_id"],
+                source=trace["source"],
+                question=trace["question"],
+                policy_code=trace["policy_code"],
+                plan_json=trace.get("plan_json"),
+                rows_fetched=trace.get("rows_fetched"),
+                was_narrowed=trace.get("was_narrowed"),
+                output_type=trace.get("output_type"),
+                duration_ms=trace.get("duration_ms"),
+                model=self.config.ask_model_effective,
+                error_code=trace.get("error_code"),
+            )
+        except Exception:
+            logger.exception(
+                "ask_history_write_failed user_id=%s", trace.get("telegram_user_id")
             )
 
-    def _ask(self, telegram_user_id: int, question: str) -> AskResult:
-        question = (question or "").strip()
+    @staticmethod
+    def _plan_payload(plan: Optional[AskQueryPlan]) -> Optional[str]:
+        if plan is None:
+            return None
+        payload = {
+            "transaction_type": plan.transaction_type,
+            "data_scope": plan.data_scope,
+            "date_from_utc": plan.date_from_utc.isoformat()
+            if plan.date_from_utc
+            else None,
+            "date_to_utc": plan.date_to_utc.isoformat() if plan.date_to_utc else None,
+            "categories": list(plan.categories),
+            "currencies": list(plan.currencies),
+            "text_terms": list(plan.text_terms),
+            "group_by": plan.group_by,
+            "metrics": list(plan.metrics),
+            "semantic_filter_required": plan.semantic_filter_required,
+            "output_preference": plan.output_preference,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def _ask(self, telegram_user_id: int, trace: dict) -> AskResult:
+        question = trace["question"]
         if not question:
+            trace["error_code"] = "empty"
             return self._text("Задайте вопрос о ваших финансовых данных.")
         if len(question) > self.config.ask_max_question_length:
+            trace["error_code"] = "too_long"
             return self._text(
                 f"Вопрос слишком длинный (лимит {self.config.ask_max_question_length} символов).\nСформулируйте короче."
             )
         if not self._allow_request(telegram_user_id):
+            trace["error_code"] = "rate_limited"
             return self._text(
                 "Слишком много запросов в минуту. Подождите немного и повторите."
             )
 
         policy_code = self.policy.classify(question)
+        trace["policy_code"] = policy_code
         if policy_code != POLICY_FINANCIAL:
             logger.info(
                 "ask_rejected user_id=%s policy=%s", telegram_user_id, policy_code
             )
+            trace["output_type"] = "TEXT"
             return self._text(
                 POLICY_MESSAGES.get(policy_code, POLICY_MESSAGES[POLICY_AMBIGUOUS])
             )
@@ -124,19 +208,28 @@ class AskService:
             plan = self.planner.plan(question, category_catalog, main_currency)
         except Exception:
             logger.exception("ask_plan_failed user_id=%s", telegram_user_id)
+            trace["error_code"] = "plan_failed"
+            trace["output_type"] = "TEXT"
             return self._text(
                 "Не удалось понять вопрос. Переформулируйте его, пожалуйста."
             )
+        trace["plan_json"] = self._plan_payload(plan)
 
-        rows = self._fetch_rows(access_scope, plan)
+        rows = self._fetch_rows(access_scope, plan, trace)
         if rows is None:
+            trace["error_code"] = "too_broad"
+            trace["output_type"] = "TEXT"
             return self._text(TOO_BROAD_TEXT)
         if not rows:
+            trace["error_code"] = "no_data"
+            trace["output_type"] = "TEXT"
             return self._text(NO_DATA_TEXT)
 
         if plan.semantic_filter_required and self.llm_client is not None:
             rows = self._semantic_filter(question, rows)
             if not rows:
+                trace["error_code"] = "no_data"
+                trace["output_type"] = "TEXT"
                 return self._text(NO_DATA_TEXT)
 
         category_titles = self._category_titles(category_catalog)
@@ -147,8 +240,14 @@ class AskService:
         )
 
         if result.total_count == 0:
+            trace["error_code"] = "unconverted_only"
+            trace["output_type"] = "TEXT"
             note = self._unconverted_note(result)
             return self._text(f"{NO_DATA_TEXT}\n{note}" if note else NO_DATA_TEXT)
+
+        if self._wants_list(question):
+            trace["output_type"] = "TEXT"
+            return self._build_list_answer(plan, result, rows, category_titles)
 
         output_preference = self._output_preference(plan, result)
         if output_preference == ASK_OUTPUT_TEXT:
@@ -158,7 +257,7 @@ class AskService:
     # ---- data ----
 
     def _fetch_rows(
-        self, access_scope, plan: AskQueryPlan
+        self, access_scope, plan: AskQueryPlan, trace: dict
     ) -> Optional[list[AnalyticsTransaction]]:
         limit = self.config.ask_max_rows + 1
         rows = self.repository.fetch_transactions(
@@ -172,6 +271,7 @@ class AskService:
             text_terms=plan.text_terms,
             limit=limit,
         )
+        trace["rows_fetched"] = len(rows)
         if len(rows) <= self.config.ask_max_rows:
             return rows
         if (
@@ -192,6 +292,8 @@ class AskService:
                 text_terms=plan.text_terms,
                 limit=limit,
             )
+            trace["was_narrowed"] = True
+            trace["rows_fetched"] = len(narrowed)
             if len(narrowed) <= self.config.ask_max_rows:
                 return narrowed
         return None
@@ -262,6 +364,23 @@ class AskService:
             for currency, count in result.unconverted.items()
         )
         return f"Часть операций не приведена к {result.currency} из-за отсутствия сохранённого курса ({detail})."
+
+    @staticmethod
+    def _wants_list(question: str) -> bool:
+        lowered = (question or "").lower()
+        return any(marker in lowered for marker in _LIST_MARKERS)
+
+    def _build_list_answer(self, plan, result, rows, category_titles) -> AskResult:
+        total_minor = result.total_minor if result.total_count else None
+        text = build_list_text(
+            rows,
+            category_titles,
+            result.currency,
+            total_minor,
+            result.unconverted,
+            self.config.app_timezone,
+        )
+        return self._text(text)
 
     def _headline_parts(
         self, plan: AskQueryPlan, category_catalog: dict[str, dict[str, str]]

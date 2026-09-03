@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine, event, text
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from categories import CATEGORY_BY_TYPE
@@ -158,6 +158,24 @@ class ProcessingEvent(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+
+
+class AskRequest(Base):
+    __tablename__ = "ask_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    source: Mapped[str] = mapped_column(String(16), default="text")
+    question: Mapped[str] = mapped_column(Text)
+    policy_code: Mapped[str] = mapped_column(String(32))
+    plan_json: Mapped[Optional[str]] = mapped_column(Text)
+    rows_fetched: Mapped[Optional[int]] = mapped_column(Integer)
+    was_narrowed: Mapped[Optional[bool]] = mapped_column(Boolean)
+    output_type: Mapped[Optional[str]] = mapped_column(String(16))
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    model: Mapped[Optional[str]] = mapped_column(String(128))
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
 
 
 class UserCategory(Base):
@@ -479,6 +497,37 @@ class Database:
                     status=status,
                     error_code=error_code,
                     duration_ms=duration_ms,
+                )
+            )
+
+    def record_ask(
+        self,
+        telegram_user_id: int,
+        source: str,
+        question: str,
+        policy_code: str,
+        plan_json: Optional[str] = None,
+        rows_fetched: Optional[int] = None,
+        was_narrowed: Optional[bool] = None,
+        output_type: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        model: Optional[str] = None,
+        error_code: Optional[str] = None,
+    ) -> None:
+        with self.Session.begin() as session:
+            session.add(
+                AskRequest(
+                    telegram_user_id=telegram_user_id,
+                    source=source,
+                    question=question,
+                    policy_code=policy_code,
+                    plan_json=plan_json,
+                    rows_fetched=rows_fetched,
+                    was_narrowed=was_narrowed,
+                    output_type=output_type,
+                    duration_ms=duration_ms,
+                    model=model,
+                    error_code=error_code,
                 )
             )
 

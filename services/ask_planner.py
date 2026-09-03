@@ -265,6 +265,17 @@ def _month_number(text: str) -> Optional[int]:
     return None
 
 
+def _detect_scope(text: str) -> str:
+    lowered = (text or "").lower()
+    has_family = "семейн" in lowered
+    has_personal = "личн" in lowered or "только мои" in lowered
+    if has_personal and not has_family:
+        return "PERSONAL"
+    if has_family and not has_personal:
+        return "FAMILY"
+    return "ACCESSIBLE"
+
+
 def _add_months_local(value: datetime, months: int) -> datetime:
     month_index = value.month - 1 + months
     year = value.year + month_index // 12
@@ -366,7 +377,7 @@ class AskPlanner:
                 raw = self._llm_raw_plan(
                     question, category_catalog, main_currency, now_local
                 )
-                return self._validate_plan(raw, category_catalog, now_local)
+                return self._validate_plan(raw, category_catalog, now_local, question)
             except (AskLLMError, ValueError):
                 pass
         return self._deterministic_plan(question, category_catalog, now_local)
@@ -409,7 +420,7 @@ class AskPlanner:
         )
         return AskQueryPlan(
             transaction_type=transaction_type,
-            data_scope=ASK_SCOPE_ACCESSIBLE,
+            data_scope=_detect_scope(text),
             date_from_utc=self._to_utc(date_from) if date_from else None,
             date_to_utc=self._to_utc(date_to) if date_to else None,
             categories=tuple(categories),
@@ -552,7 +563,20 @@ class AskPlanner:
             return ASK_OUTPUT_INFOGRAPHIC
         if any(
             word in text
-            for word in ("текстом", "только текст", "кратко", "списком", "числом")
+            for word in (
+                "текстом",
+                "только текст",
+                "кратко",
+                "списком",
+                "числом",
+                "построчно",
+                "перечисли",
+                "выведи все",
+                "покажи все",
+                "все операции",
+                "каждую запись",
+                "по каждой операции",
+            )
         ):
             return ASK_OUTPUT_TEXT
         return ASK_OUTPUT_AUTO
@@ -610,6 +634,7 @@ class AskPlanner:
         raw: dict,
         category_catalog: dict[str, dict[str, str]],
         now_local: datetime,
+        question: str = "",
     ) -> AskQueryPlan:
         transaction_type = str(raw.get("transaction_type") or "").upper() or None
         if transaction_type not in (None, "EXPENSE", "INCOME"):
@@ -644,6 +669,8 @@ class AskPlanner:
         data_scope = str(raw.get("data_scope") or ASK_SCOPE_ACCESSIBLE).upper()
         if data_scope not in {"ACCESSIBLE", "PERSONAL", "FAMILY", "MY_PAYMENTS"}:
             data_scope = ASK_SCOPE_ACCESSIBLE
+        if question.strip():
+            data_scope = _detect_scope(question) or data_scope
         text_terms = [
             str(term).strip()[:80]
             for term in (raw.get("text_terms") or [])

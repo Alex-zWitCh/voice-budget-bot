@@ -153,8 +153,8 @@ class AnalyticsRepository:
         if data_scope == ASK_SCOPE_PERSONAL:
             return personal, params
         return (
-            "(telegram_user_id = :user_id AND scope = 'personal') "
-            "OR (scope = 'family' AND family_id = :family_id)",
+            "((telegram_user_id = :user_id AND scope = 'personal') "
+            "OR (scope = 'family' AND family_id = :family_id))",
             params,
         )
 

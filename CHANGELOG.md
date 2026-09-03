@@ -20,6 +20,24 @@ All notable changes to Voice Budget Bot will be documented in this file.
     `ASK_MAX_ROWS`, `ASK_MAX_QUESTION_LENGTH` and rate limiting.
   - Shared currency-conversion helpers extracted to
     `services/currency_conversion.py` (used by both reports and /ask).
+  - `ask_requests` history table: every `/ask` stores question, source
+    (text/voice), policy decision, normalized query plan, rows fetched,
+    output type, latency and error code (gated by `ASK_HISTORY_ENABLED`).
+    Financial rows are never stored — only the request itself and aggregates.
+  - `/ask` can return a line-by-line list of matched operations when asked
+    («построчно», «перечисли», «все операции») — date, amount, category,
+    description and scope per row, plus a total.
+  - Data scope is now chosen deterministically from the wording of the question
+    (`PERSONAL`/`FAMILY`/`ACCESSIBLE`) instead of relying only on the LLM,
+    so identical requests produce stable results.
+- `/start` no longer fails when the welcome text is longer than the Telegram
+  photo caption limit: the photo is sent without caption and the full text as a
+  separate message.
+- Processing feedback for voice/text input: transient «распознаю…» /
+  «анализирую…» replies while long-running recognition or analysis happens.
+- Native `systemd` deployment assets under `deploy/` (service unit, monitoring
+  timer that logs per-service memory/CPU, deploy script) replacing the
+  container-based setup.
 - Security tests for family isolation, SQLite read-only enforcement and policy
   classification.
 - Pending exchange-rate dialogs are persisted in a new `pending_exchanges` table
@@ -31,6 +49,15 @@ All notable changes to Voice Budget Bot will be documented in this file.
 - ffmpeg conversion errors now carry and log the stderr tail for diagnosis.
 - Centralized access checks in `services/access.py` shared by `bot.py` and the
   voice/text handler.
+
+### Fixed
+- `/ask` visible-scope queries (`ACCESSIBLE`) returned **all** personal rows
+  without applying category/type/period filters because the visibility
+  `OR`-clause was not parenthesized and `AND` binds tighter than `OR`. This
+  caused implausibly large totals and row counts (e.g. «алкоголь» summing the
+  whole history). Personal and family filters are now applied correctly.
+- `/ask` produced unstable results for the same question (e.g. 13 vs 85 rows)
+  because the data scope could vary between runs; scope is now deterministic.
 
 ### Changed
 - `STT_VERIFY_SSL` defaults to `true` (secure by default); set explicitly to
