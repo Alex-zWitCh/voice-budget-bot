@@ -378,10 +378,13 @@ def build_list_text(
     unconverted: dict[str, int],
     app_timezone: str,
     limit: int = 60,
+    total: Optional[int] = None,
 ) -> str:
     tz = ZoneInfo(app_timezone)
-    lines = [f"Найдено операций: {len(rows)}."]
-    for row in rows[:limit]:
+    count = total if total is not None else len(rows)
+    shown = rows[:limit]
+    lines = [f"Найдено операций: {count}."]
+    for row in shown:
         local_date = row.message_date_utc.astimezone(tz).strftime("%d.%m.%Y")
         category = category_titles.get(row.category, row.category)
         scope_label = "Семейное" if row.scope == "family" else "Личное"
@@ -390,9 +393,9 @@ def build_list_text(
         lines.append(
             f"{local_date}  {_compact_money(row.amount_minor, row.currency)} · {category}{detail} · {scope_label}"
         )
-    if len(rows) > limit:
-        lines.append(f"…и ещё {len(rows) - limit} операций.")
-    if total_minor is not None and len(rows):
+    if count > len(shown):
+        lines.append(f"…и ещё {count - len(shown)} операций.")
+    if total_minor is not None and len(shown):
         lines.append(f"Сумма (в {currency}): {format_minor(total_minor, currency)}")
     if unconverted:
         skipped = ", ".join(

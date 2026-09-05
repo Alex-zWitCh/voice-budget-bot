@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -48,11 +49,28 @@ _LIST_MARKERS = (
     "построчно",
     "перечисли",
     "списком",
+    "перечень",
     "все операции",
-    "выведи все",
     "покажи все",
+    "покажи операции",
     "каждую запись",
     "по каждой операции",
+    "какие были",
+)
+
+_NEWEST_RE = re.compile(
+    r"(?:(\d{1,3})\s+)?(?:моих\s+)?последн\w*\s+"
+    r"(?:личных\s+и\s+семейных\s+|личных\s+|семейных\s+)?"
+    r"(трат|операци|запис|расход|покуп|списан|транзакц|конвертац)"
+)
+
+_EXCHANGE_MARKERS = (
+    "конвертац",
+    "обмен",
+    "поменял",
+    "поменяла",
+    "менял",
+    "перевод валют",
 )
 
 POLICY_MESSAGES = {
@@ -215,7 +233,12 @@ class AskService:
             )
         trace["plan_json"] = self._plan_payload(plan)
 
-        rows = self._fetch_rows(access_scope, plan, trace)
+        rows = self._fetch_rows(
+            access_scope,
+            plan,
+            trace,
+            exclude_exchange_legs=not self._wants_exchange(question),
+        )
         if rows is None:
             trace["error_code"] = "too_broad"
             trace["output_type"] = "TEXT"
@@ -247,7 +270,7 @@ class AskService:
 
         if self._wants_list(question):
             trace["output_type"] = "TEXT"
-            return self._build_list_answer(plan, result, rows, category_titles)
+            return self._build_list_answer(question, result, rows, category_titles)
 
         output_preference = self._output_preference(plan, result)
         if output_preference == ASK_OUTPUT_TEXT:
@@ -257,7 +280,11 @@ class AskService:
     # ---- data ----
 
     def _fetch_rows(
-        self, access_scope, plan: AskQueryPlan, trace: dict
+        self,
+        access_scope,
+        plan: AskQueryPlan,
+        trace: dict,
+        exclude_exchange_legs: bool = True,
     ) -> Optional[list[AnalyticsTransaction]]:
         limit = self.config.ask_max_rows + 1
         rows = self.repository.fetch_transactions(
@@ -270,6 +297,7 @@ class AskService:
             currencies=plan.currencies,
             text_terms=plan.text_terms,
             limit=limit,
+            exclude_exchange_legs=exclude_exchange_legs,
         )
         trace["rows_fetched"] = len(rows)
         if len(rows) <= self.config.ask_max_rows:
@@ -291,6 +319,7 @@ class AskService:
                 currencies=plan.currencies,
                 text_terms=plan.text_terms,
                 limit=limit,
+                exclude_exchange_legs=exclude_exchange_legs,
             )
             trace["was_narrowed"] = True
             trace["rows_fetched"] = len(narrowed)
@@ -368,17 +397,40 @@ class AskService:
     @staticmethod
     def _wants_list(question: str) -> bool:
         lowered = (question or "").lower()
-        return any(marker in lowered for marker in _LIST_MARKERS)
+        return any(marker in lowered for marker in _LIST_MARKERS) or bool(
+            _NEWEST_RE.search(lowered)
+        )
 
-    def _build_list_answer(self, plan, result, rows, category_titles) -> AskResult:
+    @staticmethod
+    def _wants_exchange(question: str) -> bool:
+        lowered = (question or "").lower()
+        return any(marker in lowered for marker in _EXCHANGE_MARKERS)
+
+    @staticmethod
+    def _number_in_question(question: str) -> Optional[int]:
+        match = re.search(r"\b(\d{1,3})\b", question or "")
+        return int(match.group(1)) if match else None
+
+    def _build_list_answer(self, question, result, rows, category_titles) -> AskResult:
+        total_count = len(rows)
+        newest_first = bool(_NEWEST_RE.search((question or "").lower()))
+        requested = self._number_in_question(question)
+        if newest_first:
+            shown = list(reversed(rows))
+            cap = requested if requested is not None and 1 <= requested <= 60 else 60
+            shown = shown[:cap]
+        else:
+            cap = requested if requested is not None and 1 <= requested <= 60 else None
+            shown = rows[:cap] if cap else rows
         total_minor = result.total_minor if result.total_count else None
         text = build_list_text(
-            rows,
+            shown,
             category_titles,
             result.currency,
             total_minor,
             result.unconverted,
             self.config.app_timezone,
+            total=total_count,
         )
         return self._text(text)
 

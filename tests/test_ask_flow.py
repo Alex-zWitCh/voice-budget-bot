@@ -225,3 +225,48 @@ def test_ask_scope_deterministic_from_question(tmp_path):
         planner.plan("сколько я трачу на кафе", CATEGORY_BY_TYPE, "RUB").data_scope
         == "ACCESSIBLE"
     )
+
+
+def _dated_tx(db, user, message_id, amount_minor, date_utc):
+    return db.create_transaction(
+        telegram_chat_id=user,
+        telegram_message_id=message_id,
+        telegram_user_id=user,
+        parsed=ParsedTransaction("EXPENSE", amount_minor, "RUB", "CAFE", "кафе", 0.95),
+        transcript="кафе",
+        message_date_utc=date_utc,
+        voice_duration_sec=0,
+        config=_db_config(),
+    )
+
+
+def test_ask_returns_last_n_operations_newest_first(tmp_path):
+    from datetime import datetime, timezone
+
+    db_path = tmp_path / "ask-last.sqlite3"
+    db = Database(db_path)
+    _dated_tx(db, 100, 1, 100000, datetime(2026, 7, 1, 12, tzinfo=timezone.utc))
+    _dated_tx(db, 100, 2, 200000, datetime(2026, 7, 2, 12, tzinfo=timezone.utc))
+    _dated_tx(db, 100, 3, 300000, datetime(2026, 7, 3, 12, tzinfo=timezone.utc))
+    config = SimpleNamespace(
+        ask_max_question_length=2000,
+        ask_max_rows=500,
+        app_timezone="Europe/Moscow",
+        ask_temp_dir=tmp_path / "ask-images",
+    )
+    repository = AnalyticsRepository(db_path)
+    planner = AskPlanner(app_timezone="Europe/Moscow")
+    service = AskService(
+        config=config,
+        repository=repository,
+        policy=AskPolicy(),
+        planner=planner,
+        calculator=AnalyticsCalculator(),
+        renderer=AskRenderer(config.ask_temp_dir, config.app_timezone),
+    )
+    result = service.ask(100, "Выведи 3 моих последних трат")
+    assert result.output_type == "TEXT"
+    assert result.text is not None
+    assert "Найдено операций: 3." in result.text
+    assert result.text.index("03.07.2026") < result.text.index("01.07.2026")
+    assert "Сумма (в RUB): 6 000,00" in result.text

@@ -27,6 +27,12 @@ All notable changes to Voice Budget Bot will be documented in this file.
   - `/ask` can return a line-by-line list of matched operations when asked
     («построчно», «перечисли», «все операции») — date, amount, category,
     description and scope per row, plus a total.
+  - List requests support «последние N» / «выведи N последних трат»: the bot
+    prints the N most recent operations first (newest to oldest).
+  - Currency-conversion mirror legs are excluded from `/ask` spend/income
+    aggregates by default (they do not change the balance). Requests that
+    explicitly ask about conversions («конвертации/обмен/поменял») still see
+    them.
   - Data scope is now chosen deterministically from the wording of the question
     (`PERSONAL`/`FAMILY`/`ACCESSIBLE`) instead of relying only on the LLM,
     so identical requests produce stable results.
@@ -58,6 +64,9 @@ All notable changes to Voice Budget Bot will be documented in this file.
   whole history). Personal and family filters are now applied correctly.
 - `/ask` produced unstable results for the same question (e.g. 13 vs 85 rows)
   because the data scope could vary between runs; scope is now deterministic.
+- `/ask` returned only an aggregate sum for requests like «выведи последние N
+  трат» when the wording did not include the «построчно» marker; listing and
+  newest-first ordering are now detected from the wording.
 
 ### Changed
 - `STT_VERIFY_SSL` defaults to `true` (secure by default); set explicitly to

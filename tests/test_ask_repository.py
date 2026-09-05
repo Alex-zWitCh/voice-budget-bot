@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -6,7 +7,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
 
 from database import Database
-from schemas import ParsedTransaction
+from schemas import ParsedExchange, ParsedTransaction
 from services.analytics_repository import AnalyticsRepository
 
 
@@ -169,3 +170,39 @@ def test_accesssible_filters_categories_for_personal_rows(tmp_path):
         scope, transaction_type="INCOME", categories=("ALCOHOL",)
     )
     assert rows == []
+
+
+def test_fetch_can_exclude_exchange_legs(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    user = 700
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=user, type="private", title=None),
+        from_user=SimpleNamespace(
+            id=user, username="u", first_name="U", last_name=None
+        ),
+        message_id=10,
+        date=int(datetime(2026, 8, 30, tzinfo=timezone.utc).timestamp()),
+        voice=None,
+    )
+    config = SimpleNamespace(
+        stt_model="w", deepseek_model="d", processing_version="1.0"
+    )
+    parsed = ParsedExchange(
+        from_amount_minor=6000000,
+        from_currency="RUB",
+        to_currency="AMD",
+        to_amount_minor=24180000,
+        rate=Decimal("4.03"),
+        description="обмен",
+        confidence=0.95,
+    )
+    db.create_exchange(message, parsed, "поменял 60000 рублей на 241800 драм", config)
+
+    repository = AnalyticsRepository(tmp_path / "test.sqlite3")
+    scope = repository.make_scope(user)
+    with_legs = repository.fetch_transactions(scope, transaction_type="EXPENSE")
+    assert len(with_legs) == 1
+    no_legs = repository.fetch_transactions(
+        scope, transaction_type="EXPENSE", exclude_exchange_legs=True
+    )
+    assert no_legs == []

@@ -180,9 +180,12 @@ class AnalyticsRepository:
         currencies: tuple[str, ...] = (),
         text_terms: tuple[str, ...] = (),
         limit: Optional[int] = None,
+        exclude_exchange_legs: bool = False,
     ) -> list[AnalyticsTransaction]:
         condition, params = self._visibility(access_scope, data_scope)
         conditions = [condition]
+        if exclude_exchange_legs:
+            conditions.append("exchange_pair_id IS NULL")
         if transaction_type is not None:
             conditions.append("transaction_type = :transaction_type")
             params["transaction_type"] = transaction_type
