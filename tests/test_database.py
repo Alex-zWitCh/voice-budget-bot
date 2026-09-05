@@ -721,3 +721,28 @@ def test_legend_percent_formatting():
     assert _format_percent(0, 785000, "RUB") == "0.0%"
     assert _format_percent(1000, 0, "RUB") == "0.0%"
     assert _format_percent(785000, 785000, "RUB") == "100.0%"
+
+
+def test_exchange_is_excluded_from_category_chart(tmp_path):
+    """Зеркальные конвертации валют не должны попадать в диаграммы расходов/доходов."""
+    db = Database(tmp_path / "test.sqlite3")
+    config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
+    msg = _exchange_message()
+    db.upsert_user_and_chat(msg)
+    db.set_main_currency(20, "RUB")
+    # только конвертация USD->RUB, без реальных трат
+    db.create_exchange(msg, _parsed_exchange(), "перевёл 2000 долларов в рубли по курсу 92", config)
+
+    tz = ZoneInfo("Europe/Moscow")
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=30)
+    path, caption = build_category_chart(
+        db=db, telegram_user_id=20, app_timezone="Europe/Moscow", output_dir=tmp_path,
+        transaction_type="EXPENSE", start_local=start_local, end_local=end_local,
+        period_title="тест", empty_text="Расходов не найдено.", caption="Расходы",
+        filename_suffix="test",
+    )
+    # конвертация исключена -> диаграммы нет, получаем текст о пустоте
+    assert path is None
+    assert "Расходов не найдено" in caption
+    assert "Переводы" not in caption

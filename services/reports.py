@@ -217,6 +217,8 @@ def build_category_chart(
     for row in rows:
         if row.transaction_type != transaction_type:
             continue
+        if row.exchange_pair_id is not None:
+            continue
         base_minor = _to_base_minor(row, main_currency, rates)
         if base_minor is None:
             skipped.append(f"{row.amount_minor / 100:.2f} {row.currency}")
