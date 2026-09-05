@@ -80,16 +80,25 @@ LLM используется только для интерпретации во
 
 Для отмены активного запроса: `/cancel`.
 
-## Deployment (native)
+## Deployment (native, без Docker)
 
-Бот поставляется как нативная `systemd`-служба (см. `deploy/`):
-- `deploy/voice-budget-bot.service` — юнит (свой системный пользователь,
-  `EnvironmentFile`, харденинг, лимит памяти);
+Бот работает как **нативная `systemd`-служба** прямо на VPS, в собственном
+Python-окружении (`.venv`). Контейнеры и пересборка образов **не используются**.
+Любая доработка разворачивается на сервере без Docker — только синхронизация
+кода и рестарт службы.
+
+Конфигурация службы (см. `deploy/`):
+- `deploy/voice-budget-bot.service` — юнит: отдельный системный пользователь
+  `voice-budget-bot`, `EnvironmentFile=/opt/voice-budget-bot/.env`, харденинг
+  (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`), лимит памяти 384M,
+  `ReadWritePaths` только на каталог данных;
 - `deploy/monitoring/` — systemd-timer, пишущий метрики памяти/CPU служб в
   `/opt/bot-metrics/metrics.csv`;
 - `deploy/deploy.sh` — rsync кода на сервер + `systemctl restart`.
 
-Обновление кода: `deploy/deploy.sh` (без пересборки контейнеров).
+> ⚠️ **Правило для агента:** не пересобирать бота через Docker/docker-compose.
+> Деплой — это `deploy/deploy.sh` + `systemctl restart voice-budget-bot`.
+> Никаких `docker compose up`, `docker build` и пересоздания контейнеров.
 
 ## Project origin
 
@@ -133,7 +142,7 @@ DeepSeek-based income/expense extraction and local storage.
 - прозрачная миграция схемы: новые колонки добавляются `ALTER TABLE` идемпотентно, существующие записи сохраняются и помечаются как `personal`;
 - настраиваемое приветствие и кнопочное меню Telegram;
 - временные аудиофайлы удаляются после обработки;
-- Docker Compose deployment.
+- нативный запуск как systemd-служба на VPS (без Docker).
 
 ## Commands
 
@@ -233,22 +242,15 @@ DeepSeek-based income/expense extraction and local storage.
   <img src="assets/readme-description.png?v=3" alt="Voice Budget Bot product overview" width="720">
 </p>
 
-## Install On VPS
+## Install On VPS (native)
 
-Поддерживаемый быстрый сценарий — чистый Ubuntu/Debian VPS, SSH под `root`.
-Установщик проверит окружение, поставит недостающие `curl`, `git`, Docker и
-Docker Compose, запросит токены, создаст `.env`, соберет контейнер и включит
-автозапуск через `restart: unless-stopped`.
+Поддерживаемый сценарий — чистый Ubuntu/Debian VPS, SSH под `root`. Бот
+устанавливается как **системная служба** (systemd) в собственное окружение
+`.venv` — без Docker.
 
 <p align="center">
   <img src="assets/readme/04-deployment.png" alt="SmartExpense deployment and privacy" width="100%">
 </p>
-
-Одна строка установки:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Alex-zWitCh/voice-budget-bot/master/scripts/install.sh)"
-```
 
 Что понадобится в процессе:
 
@@ -261,16 +263,43 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/Alex-zWitCh/voice-budget
 
 По умолчанию бот ставится в `/opt/voice-budget-bot`.
 
+### Установка на сервере
+
+1. Скопируйте код репозитория в `/opt/voice-budget-bot`.
+2. Создайте системного пользователя и виртуальное окружение:
+
+   ```bash
+   useradd --create-home --shell /usr/sbin/nologin voice-budget-bot
+   python3 -m venv /opt/voice-budget-bot/.venv
+   /opt/voice-budget-bot/.venv/bin/pip install -r /opt/voice-budget-bot/requirements.txt
+   chown -R voice-budget-bot:voice-budget-bot /opt/voice-budget-bot
+   ```
+
+3. Заполните `.env` (см. ниже) и примените права на секреты.
+4. Установите systemd-юнит (`deploy/voice-budget-bot.service`) и включите службу:
+
+   ```bash
+   cp deploy/voice-budget-bot.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now voice-budget-bot
+   ```
+
+### Обновление кода
+
+```bash
+deploy/deploy.sh
+```
+
+Скрипт синхронизирует код на `/opt/voice-budget-bot`, при изменении
+`requirements.txt` доустанавливает зависимости и делает `systemctl restart`
+службы. Docker при этом не используется.
+
 После установки:
 
 ```bash
-cd /opt/voice-budget-bot
-docker compose ps
-docker logs -f voice-budget-bot
+systemctl status voice-budget-bot
+journalctl -u voice-budget-bot -f
 ```
-
-Если на сервере доступен только старый `docker-compose`, используйте его вместо
-`docker compose`.
 
 ## Welcome Message
 
@@ -314,9 +343,18 @@ ALLOWED_CHAT_IDS=123456789,-1001234567890
 
 ## Run
 
+Локальный запуск (нативный, в виртуальном окружении):
+
 ```bash
-docker compose up -d --build
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # заполните секреты
+python bot.py
 ```
+
+Запуск как службы на VPS — см. раздел «Install On VPS (native)».
+Docker не используется.
 
 For local tests:
 
@@ -337,17 +375,17 @@ text messages are sent to DeepSeek for structured extraction. API keys are not
 written to logs.
 
 > **TLS для STT:** по умолчанию проверка сертификата включена (`STT_VERIFY_SSL=true`).
-> Если локальный шлюз использует самоподписанный сертификат, пробросьте CA в
-> контейнер (см. ниже) или явно задайте `STT_VERIFY_SSL=false` в `.env`.
+> Если локальный шлюз использует самоподписанный сертификат, добавьте его в системное
+> хранилище сертификатов (см. ниже) или явно задайте `STT_VERIFY_SSL=false` в `.env`.
 
 ### Self-signed STT
 
 Если локальный STT-шлюз использует самоподписанный сертификат:
 
-1. Скопируйте CA в образ (в `Dockerfile`):
-   ```dockerfile
-   COPY certs/stt-ca.crt /usr/local/share/ca-certificates/stt-ca.crt
-   RUN update-ca-certificates
+1. Добавьте CA-сертификат в системное хранилище сертификатов:
+   ```bash
+   cp certs/stt-ca.crt /usr/local/share/ca-certificates/stt-ca.crt
+   update-ca-certificates
    ```
 2. Установите `STT_VERIFY_SSL=true` в `.env` (по умолчанию уже `true`).
 
@@ -357,14 +395,14 @@ written to logs.
 ## Диагностические логи
 
 Для тестовой диагностики задайте `LOG_LEVEL=DEBUG`. Лог приложения хранится в
-`/data/logs/voice-budget-bot.log`; каждый файл ограничен 2 МиБ, сохраняются две предыдущие
-ротации. Docker stdout также ограничен тремя файлами по 2 МиБ:
+`/opt/voice-budget-bot/data/logs/voice-budget-bot.log` (задаётся через `LOG_FILE`);
+каждый файл ограничен 2 МиБ, сохраняются две предыдущие ротации. При запуске через
+systemd логи также доступны через `journalctl -u voice-budget-bot`:
 
 ```dotenv
-LOG_FILE=/data/logs/voice-budget-bot.log
+LOG_FILE=/opt/voice-budget-bot/data/logs/voice-budget-bot.log
 LOG_MAX_BYTES=2097152
 LOG_BACKUP_COUNT=2
 ```
 
-Для эксплуатации используйте Docker Compose v2 (`docker compose`). Устаревший
-`docker-compose` 1.x может не суметь пересоздать контейнер из современного образа.
+Служба настраивается через `deploy/voice-budget-bot.service` без Docker.

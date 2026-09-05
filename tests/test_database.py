@@ -19,6 +19,7 @@ from services.reports import (
     build_previous_month_expense_chart,
     build_previous_month_income_chart,
     export_transactions_csv_gz,
+    _format_percent,
 )
 from services.scheduler import ScheduledEventRunner, calendar_text
 
@@ -713,3 +714,10 @@ def test_chart_warns_when_rate_missing(tmp_path):
     assert path is None
     assert "Пропущено" in caption
     assert "USD" in caption
+
+
+def test_legend_percent_formatting():
+    assert _format_percent(450000, 785000, "RUB") == "57.3%"
+    assert _format_percent(0, 785000, "RUB") == "0.0%"
+    assert _format_percent(1000, 0, "RUB") == "0.0%"
+    assert _format_percent(785000, 785000, "RUB") == "100.0%"

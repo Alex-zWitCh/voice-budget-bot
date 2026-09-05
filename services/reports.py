@@ -268,19 +268,22 @@ def _render_pie_chart(path: Path, totals: dict[tuple[str, str], int], currency: 
     colors = plt.get_cmap("tab20").colors
     wedges, _texts, autotexts = ax.pie(
         values,
-        labels=labels,
+        labels=None,
         autopct=lambda pct: _autopct(pct, total, symbol),
         startangle=90,
         counterclock=False,
         colors=colors[: len(values)],
         pctdistance=0.72,
-        labeldistance=1.08,
         wedgeprops={"linewidth": 1, "edgecolor": "white"},
     )
     for text in autotexts:
         text.set_fontsize(9)
         text.set_color("#222222")
-    ax.legend(wedges, labels, title="Категории", loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+    legend_labels = [
+        f"{name} — {_format_percent(value, total, symbol)}"
+        for name, value in zip(labels, values)
+    ]
+    ax.legend(wedges, legend_labels, title="Категории", loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
     ax.set_title(f"{title} за {period}\nИтого: {_format_money(total, symbol)}", fontsize=15, pad=18)
     ax.axis("equal")
     fig.tight_layout()
@@ -293,6 +296,11 @@ def _autopct(pct: float, total: float, symbol: str) -> str:
         return ""
     amount = total * pct / 100
     return f"{pct:.1f}%\n{_format_money(amount, symbol)}"
+
+
+def _format_percent(value: float, total: float, symbol: str) -> str:
+    percent = (value / total) * 100 if total else 0.0
+    return f"{percent:.1f}%"
 
 
 def _format_money(amount: float, symbol: str) -> str:
