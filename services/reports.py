@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import gzip
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -13,17 +11,36 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
 from categories import CURRENCY_SYMBOLS
 from services.currency_conversion import (
     build_rate_map as _build_rate_map,
-    format_exchange_rate as _format_exchange_rate,
     to_base_minor as _to_base_minor,
 )
 
 logger = logging.getLogger(__name__)
 
+_TYPE_TITLES = {"EXPENSE": "Расход", "INCOME": "Доход"}
+_XLSX_HEADERS = [
+    "Дата",
+    "Тип",
+    "Категория",
+    "Сумма",
+    "Валюта",
+    "Сумма (осн. валюта)",
+    "Осн. валюта",
+    "Из валюты",
+    "Из суммы",
+    "Курс",
+    "Описание",
+    "Транскрипция",
+]
 
-def export_transactions_csv_gz(
+
+def export_transactions_xlsx(
     db,
     telegram_user_id: int,
     app_timezone: str,
@@ -41,77 +58,51 @@ def export_transactions_csv_gz(
     rates = _build_rate_map(db.get_exchange_rates(telegram_user_id))
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"transactions-{telegram_user_id}-{filename_suffix}.csv.gz"
-    with gzip.open(path, "wt", encoding="utf-8-sig", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(
+    path = output_dir / f"transactions-{telegram_user_id}-{filename_suffix}.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Операции"
+    ws.append(_XLSX_HEADERS)
+    for row in rows:
+        base_minor = _to_base_minor(row, main_currency, rates)
+        date_local = _as_utc(row.message_date_utc).astimezone(tz)
+        ws.append(
             [
-                "id",
-                "date_local",
-                "date_utc",
-                "created_at_utc",
-                "telegram_chat_id",
-                "telegram_message_id",
-                "telegram_user_id",
-                "transaction_type",
-                "amount",
-                "amount_minor",
-                "currency",
-                "amount_main",
-                "amount_main_minor",
-                "main_currency",
-                "from_currency",
-                "from_amount",
-                "exchange_rate",
-                "exchange_pair_id",
-                "category_code",
-                "category_title",
-                "description",
-                "transcript",
-                "voice_duration_sec",
-                "groq_model",
-                "deepseek_model",
-                "deepseek_confidence",
-                "processing_version",
+                date_local.strftime("%Y-%m-%d %H:%M"),
+                _TYPE_TITLES.get(row.transaction_type, row.transaction_type),
+                category_catalog.get(row.transaction_type, {}).get(row.category, row.category),
+                round(row.amount_minor / 100, 2),
+                row.currency,
+                round(base_minor / 100, 2) if base_minor is not None else "",
+                main_currency,
+                row.from_currency or "",
+                round(row.from_amount_minor / 100, 2) if row.from_amount_minor is not None else "",
+                float(row.exchange_rate) if row.exchange_rate is not None else "",
+                row.description,
+                row.transcript,
             ]
         )
-        for row in rows:
-            category_title = category_catalog.get(row.transaction_type, {}).get(row.category, row.category)
-            date_utc = _as_utc(row.message_date_utc)
-            created_utc = _as_utc(row.created_at_utc)
-            base_minor = _to_base_minor(row, main_currency, rates)
-            writer.writerow(
-                [
-                    row.id,
-                    date_utc.astimezone(tz).isoformat(timespec="seconds"),
-                    date_utc.isoformat(timespec="seconds"),
-                    created_utc.isoformat(timespec="seconds"),
-                    row.telegram_chat_id,
-                    row.telegram_message_id,
-                    row.telegram_user_id,
-                    row.transaction_type,
-                    f"{row.amount_minor / 100:.2f}",
-                    row.amount_minor,
-                    row.currency,
-                    f"{base_minor / 100:.2f}" if base_minor is not None else "",
-                    base_minor if base_minor is not None else "",
-                    main_currency,
-                    row.from_currency or "",
-                    f"{row.from_amount_minor / 100:.2f}" if row.from_amount_minor is not None else "",
-                    _format_exchange_rate(row.exchange_rate),
-                    row.exchange_pair_id if row.exchange_pair_id is not None else "",
-                    row.category,
-                    category_title,
-                    row.description,
-                    row.transcript,
-                    row.voice_duration_sec,
-                    row.groq_model,
-                    row.deepseek_model,
-                    float(row.deepseek_confidence),
-                    row.processing_version,
-                ]
-            )
+    _style_worksheet(ws)
+    wb.save(path)
     return path
+
+
+def _style_worksheet(ws) -> None:
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            if isinstance(cell.value, float):
+                cell.number_format = "0.00"
+    widths = [16, 9, 18, 12, 9, 18, 11, 11, 11, 10, 32, 44]
+    for index, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    ws.freeze_panes = "A2"
 
 
 def build_previous_month_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:

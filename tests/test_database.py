@@ -1,5 +1,3 @@
-import csv
-import gzip
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+from openpyxl import load_workbook
 from sqlalchemy import text
 
 from database import Database, Transaction
@@ -18,7 +17,7 @@ from services.reports import (
     build_last_30_days_income_chart,
     build_previous_month_expense_chart,
     build_previous_month_income_chart,
-    export_transactions_csv_gz,
+    export_transactions_xlsx,
     _format_percent,
 )
 from services.scheduler import ScheduledEventRunner, calendar_text
@@ -127,7 +126,7 @@ def test_delete_scheduled_event(tmp_path):
     assert db.get_due_scheduled_events(datetime.now(timezone.utc) + timedelta(days=2)) == []
 
 
-def test_export_transactions_csv_gz_contains_full_transcript(tmp_path):
+def test_export_transactions_xlsx_contains_full_transcript(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _message(message_id=50)
@@ -140,14 +139,18 @@ def test_export_transactions_csv_gz_contains_full_transcript(tmp_path):
     tz = ZoneInfo("Europe/Moscow")
     end_local = datetime.now(tz)
     start_local = end_local - timedelta(days=1)
-    path = export_transactions_csv_gz(db, 20, "Europe/Moscow", tmp_path, start_local, end_local, "test-period")
+    path = export_transactions_xlsx(db, 20, "Europe/Moscow", tmp_path, start_local, end_local, "test-period")
 
-    with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as file:
-        rows = list(csv.DictReader(file))
-    assert len(rows) == 1
-    assert rows[0]["category_code"] == "ALCOHOL"
-    assert rows[0]["category_title"] == "Алкоголь"
-    assert rows[0]["transcript"] == "девятьсот девяносто восемь рублей пиво с закусками"
+    assert path.suffix == ".xlsx"
+    wb = load_workbook(path, data_only=True)
+    ws = wb.active
+    headers = [cell.value for cell in ws[1]]
+    row = next(ws.iter_rows(min_row=2, values_only=True))
+    data = dict(zip(headers, row))
+    assert data["Тип"] == "Расход"
+    assert data["Категория"] == "Алкоголь"
+    assert data["Сумма"] == 998.0
+    assert data["Транскрипция"] == "девятьсот девяносто восемь рублей пиво с закусками"
 
 
 def test_previous_month_expense_chart_is_created(tmp_path):
@@ -266,7 +269,7 @@ def test_monthly_report_is_sent_once_on_first_day(tmp_path):
     assert "Автоматический отчет" in bot.photos[1][1]
     assert len(bot.documents) == 1
     assert bot.documents[0][0] == 1
-    assert bot.documents[0][1].endswith(".csv.gz")
+    assert bot.documents[0][1].endswith(".xlsx")
 
 
 def test_monthly_report_catch_up_on_second_day(tmp_path):
@@ -302,7 +305,7 @@ def test_monthly_report_catch_up_on_second_day(tmp_path):
 
     assert len(bot.photos) == 1
     assert len(bot.documents) == 1
-    assert bot.documents[0][1].endswith(".csv.gz")
+    assert bot.documents[0][1].endswith(".xlsx")
 
 
 def _create_legacy_db(path):
@@ -584,7 +587,7 @@ def test_exchange_chart_converts_to_main_currency(tmp_path):
     assert path.exists()
 
 
-def test_csv_export_includes_main_and_exchange_columns(tmp_path):
+def test_xlsx_export_includes_main_and_exchange_columns(tmp_path):
     db = Database(tmp_path / "test.sqlite3")
     config = SimpleNamespace(stt_model="whisper-large-v3", deepseek_model="deepseek-v4-flash", processing_version="1.0")
     message = _exchange_message(days_ago=0)
@@ -595,18 +598,20 @@ def test_csv_export_includes_main_and_exchange_columns(tmp_path):
     tz = ZoneInfo("Europe/Moscow")
     end_local = datetime.now(tz)
     start_local = end_local - timedelta(days=1)
-    path = export_transactions_csv_gz(db, 20, "Europe/Moscow", tmp_path, start_local, end_local, "test-period")
+    path = export_transactions_xlsx(db, 20, "Europe/Moscow", tmp_path, start_local, end_local, "test-period")
 
-    with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as file:
-        rows = list(csv.DictReader(file))
+    wb = load_workbook(path, data_only=True)
+    ws = wb.active
+    headers = [cell.value for cell in ws[1]]
+    rows = [dict(zip(headers, row)) for row in ws.iter_rows(min_row=2, values_only=True)]
     assert len(rows) == 2
-    income = next(row for row in rows if row["transaction_type"] == "INCOME")
-    assert income["currency"] == "RUB"
-    assert income["from_currency"] == "USD"
-    assert income["from_amount"] == "2000.00"
-    assert income["exchange_rate"] == "92"
-    assert income["main_currency"] == "RUB"
-    assert income["amount_main_minor"] == "18400000"
+    income = next(row for row in rows if row["Тип"] == "Доход")
+    assert income["Валюта"] == "RUB"
+    assert income["Из валюты"] == "USD"
+    assert income["Из суммы"] == 2000.0
+    assert income["Курс"] == 92.0
+    assert income["Осн. валюта"] == "RUB"
+    assert income["Сумма (осн. валюта)"] == 184000.0
 
 
 def test_concurrent_exchanges_get_unique_pair_ids(tmp_path):

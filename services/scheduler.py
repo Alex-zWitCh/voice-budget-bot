@@ -11,7 +11,7 @@ from schemas import ParsedTransaction
 from services.reports import (
     build_previous_month_expense_chart,
     build_previous_month_income_chart,
-    export_transactions_csv_gz,
+    export_transactions_xlsx,
     previous_month_period,
 )
 
@@ -119,7 +119,7 @@ class ScheduledEventRunner:
                     else:
                         self.bot.send_message(chat_id, f"Автоматический отчет за прошлый месяц\n\n{caption}")
 
-                csv_path = export_transactions_csv_gz(
+                xlsx_path = export_transactions_xlsx(
                     self.db,
                     user_id,
                     self.config.app_timezone,
@@ -128,13 +128,13 @@ class ScheduledEventRunner:
                     end_local,
                     f"monthly-{period_key}",
                 )
-                paths.append(csv_path)
-                with open(csv_path, "rb") as file:
+                paths.append(xlsx_path)
+                with open(xlsx_path, "rb") as file:
                     self.bot.send_document(
                         chat_id,
                         file,
-                        visible_file_name=csv_path.name,
-                        caption=f"CSV-выгрузка всех записей за {start_local:%m.%Y}.",
+                        visible_file_name=xlsx_path.name,
+                        caption=f"Excel-таблица со всеми записями за {start_local:%m.%Y}.",
                     )
                 self.db.record_report_delivery(user_id, chat_id, "monthly_report_bundle", period_key)
             except Exception:

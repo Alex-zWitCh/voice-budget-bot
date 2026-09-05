@@ -88,9 +88,9 @@ All notable changes to Voice Budget Bot will be documented in this file.
 - `/currency [CODE]` — show or change the user's main currency (stored on `users.main_currency`).
 - Reports in a main currency: expense/income pie charts convert every operation to
   the user's main currency using stored exchange rates (mirror records and the most
-  recent rate for the pair). Detailed CSV export now includes the original amount
-  and currency plus `amount_main`/`main_currency`, `from_currency`, `from_amount`,
-  `exchange_rate`, `exchange_pair_id`.
+  recent rate for the pair). The monthly Excel export includes the original amount
+  and currency plus the amount in the main currency, `from_currency`, `from_amount`,
+  `exchange_rate`.
 - Family layer: `families` and `family_members` tables, `/family` (create/status),
   `/family create <name>`, `/family invite` (invite code), `/join <code>`.
 - Transaction scope: `scope = personal | family`, `family_id`, `paid_by` columns on
@@ -103,7 +103,7 @@ All notable changes to Voice Budget Bot will be documented in this file.
 - Groq became an optional fallback STT channel (`GROQ_FALLBACK_ENABLED`), used when the primary STT fails or returns an empty transcript.
 - Added direct text input for transactions, reminders, and deferred expenses through the same parser path as voice transcripts.
 - Added `/report` and a Telegram menu button for last-30-days expense and income pie charts.
-- Added automatic previous-calendar-month report bundle delivery on the 1st day of each month: expense chart, income chart, and CSV.gz with all records for the period.
+- Added automatic previous-calendar-month report bundle delivery on the 1st day of each month: expense chart, income chart, and an Excel file (.xlsx) with all records for the period.
 - Added the default `ALCOHOL` expense category for alcohol purchases.
 - Detailed configurable application logs with 2 MiB file rotation and two retained backups.
 - Docker JSON log rotation capped at three files of 2 MiB.
@@ -115,7 +115,10 @@ All notable changes to Voice Budget Bot will be documented in this file.
   now re-encoded and recognized. Long recordings kept losing their tail (e.g. the
   target "… на 140 000 драм" in a currency conversion).
 - Default maximum voice-message duration is now 20 seconds.
-- Removed the manual `/export` command; detailed CSV export is now included in the automatic monthly report bundle.
+- The automatic monthly report now sends an Excel `.xlsx` table of all records for
+  the month instead of a CSV.gz archive (`export_transactions_xlsx`); the old CSV
+  exporter was removed.
+- Removed the manual `/export` command; the detailed record export is now included in the automatic monthly report bundle.
 
 ## [1.0.0] - 2026-07-22
 
