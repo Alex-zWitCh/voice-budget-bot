@@ -694,6 +694,24 @@ class Database:
                 .all()
             )
 
+    def list_family_transactions(self, family_id: int, start_utc: datetime, end_utc: datetime) -> list[Transaction]:
+        """Все семейные записи семьи (всех участников) за период.
+
+        Используется семейными диаграммами: scope='family' + family_id.
+        """
+        with self.Session() as session:
+            return (
+                session.query(Transaction)
+                .filter(
+                    Transaction.scope == "family",
+                    Transaction.family_id == family_id,
+                    Transaction.message_date_utc >= start_utc,
+                    Transaction.message_date_utc < end_utc,
+                )
+                .order_by(Transaction.message_date_utc.asc(), Transaction.id.asc())
+                .all()
+            )
+
     def list_previous_month_report_targets(self, start_utc: datetime, end_utc: datetime) -> list[dict]:
         with self.Session() as session:
             rows = (

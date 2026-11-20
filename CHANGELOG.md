@@ -5,6 +5,12 @@ All notable changes to Voice Budget Bot will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Expense pie charts are split by scope: personal, family (mine) and
+  family (all members); no-family users keep the single expense chart.
+- New spending-dynamics chart (30-day report and monthly bundle): shows only
+  categories with a significant month-over-month change over the last
+  4 completed months (>=20% and a noticeable amount), with per-month
+  personal/family stacked bars and trend notes.
 - `/ask`: read-only natural-language analytics over personal and family records.
   Text or voice question → text or PNG-infographic answer. Includes:
   - `AnalyticsRepository` with a separate SQLite read-only connection

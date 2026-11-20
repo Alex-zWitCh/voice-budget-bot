@@ -185,6 +185,152 @@ def build_last_30_days_income_chart(db, telegram_user_id: int, app_timezone: str
     )
 
 
+def _resolve_family_id(db, telegram_user_id: int) -> int | None:
+    family = db.get_family_for_user(telegram_user_id)
+    return family.id if family is not None else None
+
+
+def _scoped_expense_chart(
+    db,
+    telegram_user_id: int,
+    app_timezone: str,
+    output_dir: Path,
+    scope_filter: str,
+    scope_title: str,
+    scope_tag: str,
+    start_local: datetime,
+    end_local: datetime,
+    period_title: str,
+    empty_text: str,
+    caption: str,
+    filename_suffix: str,
+) -> tuple[Path | None, str]:
+    family_id = _resolve_family_id(db, telegram_user_id) if scope_filter != SCOPE_PERSONAL else None
+    if scope_filter != SCOPE_PERSONAL and family_id is None:
+        return None, "Нет семьи — семейные диаграммы недоступны. Создайте семью: /family create <имя>."
+    return build_category_chart(
+        db=db,
+        telegram_user_id=telegram_user_id,
+        app_timezone=app_timezone,
+        output_dir=output_dir,
+        transaction_type="EXPENSE",
+        start_local=start_local,
+        end_local=end_local,
+        period_title=period_title,
+        empty_text=empty_text,
+        caption=caption,
+        filename_suffix=f"{filename_suffix}-{scope_tag}",
+        scope_filter=scope_filter,
+        family_id=family_id,
+    )
+
+
+def build_last_30_days_personal_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=30)
+    period = f"{start_local:%d.%m.%Y} - {end_local:%d.%m.%Y}"
+    return _scoped_expense_chart(
+        db, telegram_user_id, app_timezone, output_dir,
+        SCOPE_PERSONAL, "личные", "personal",
+        start_local, end_local, "последние 30 дней",
+        "За последние 30 дней личных расходов не найдено.",
+        f"Расходы личные за 30 дней ({period})",
+        f"last-30-days-{end_local:%Y-%m-%d}",
+    )
+
+
+def build_last_30_days_family_mine_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=30)
+    period = f"{start_local:%d.%m.%Y} - {end_local:%d.%m.%Y}"
+    return _scoped_expense_chart(
+        db, telegram_user_id, app_timezone, output_dir,
+        SCOPE_FAMILY_MINE, "семейные мои", "family-mine",
+        start_local, end_local, "последние 30 дней",
+        "За последние 30 дней ваших семейных расходов не найдено.",
+        f"Расходы семейные (мои) за 30 дней ({period})",
+        f"last-30-days-{end_local:%Y-%m-%d}",
+    )
+
+
+def build_last_30_days_family_total_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=30)
+    period = f"{start_local:%d.%m.%Y} - {end_local:%d.%m.%Y}"
+    return _scoped_expense_chart(
+        db, telegram_user_id, app_timezone, output_dir,
+        SCOPE_FAMILY_ALL, "семейные общие", "family-total",
+        start_local, end_local, "последние 30 дней",
+        "За последние 30 дней семейных расходов не найдено.",
+        f"Расходы семейные (все) за 30 дней ({period})",
+        f"last-30-days-{end_local:%Y-%m-%d}",
+    )
+
+
+def build_previous_month_personal_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    start_local, end_local = _previous_month_range(datetime.now(tz))
+    period = start_local.strftime("%m.%Y")
+    filename_suffix = start_local.strftime("%Y-%m")
+    return _scoped_expense_chart(
+        db, telegram_user_id, app_timezone, output_dir,
+        SCOPE_PERSONAL, "личные", "personal",
+        start_local, end_local, period,
+        f"За прошлый календарный месяц ({period}) личных расходов не найдено.",
+        f"Расходы личные по категориям за {period}",
+        filename_suffix,
+    )
+
+
+def build_previous_month_family_mine_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    start_local, end_local = _previous_month_range(datetime.now(tz))
+    period = start_local.strftime("%m.%Y")
+    filename_suffix = start_local.strftime("%Y-%m")
+    return _scoped_expense_chart(
+        db, telegram_user_id, app_timezone, output_dir,
+        SCOPE_FAMILY_MINE, "семейные мои", "family-mine",
+        start_local, end_local, period,
+        f"За прошлый календарный месяц ({period}) ваших семейных расходов не найдено.",
+        f"Расходы семейные (мои) по категориям за {period}",
+        filename_suffix,
+    )
+
+
+def build_previous_month_family_total_expense_chart(db, telegram_user_id: int, app_timezone: str, output_dir: Path) -> tuple[Path | None, str]:
+    tz = ZoneInfo(app_timezone)
+    start_local, end_local = _previous_month_range(datetime.now(tz))
+    period = start_local.strftime("%m.%Y")
+    filename_suffix = start_local.strftime("%Y-%m")
+    return _scoped_expense_chart(
+        db, telegram_user_id, app_timezone, output_dir,
+        SCOPE_FAMILY_ALL, "семейные общие", "family-total",
+        start_local, end_local, period,
+        f"За прошлый календарный месяц ({period}) семейных расходов не найдено.",
+        f"Расходы семейные (все) по категориям за {period}",
+        filename_suffix,
+    )
+
+
+#: Сколько завершённых календарных месяцев охватывает диаграмма динамики.
+DYNAMICS_MONTHS = 4
+#: Минимальное относительное изменение последнего месяца к предыдущему, %.
+DYNAMICS_MIN_PCT = 20.0
+#: Минимальное абсолютное изменение в minor units основной валюты.
+#: 300000 minor units = 3000.00 (калибруется по реальным данным).
+DYNAMICS_MIN_ABS_MINOR = 300000
+#: Максимум категорий на одной композитной диаграмме динамики.
+DYNAMICS_MAX_CATEGORIES = 12
+
+#: Фильтры области видимости для круговых диаграмм расходов.
+SCOPE_PERSONAL = "personal"
+SCOPE_FAMILY_MINE = "family_mine"
+SCOPE_FAMILY_ALL = "family_all"
+
+
 def build_category_chart(
     db,
     telegram_user_id: int,
@@ -197,8 +343,15 @@ def build_category_chart(
     empty_text: str,
     caption: str,
     filename_suffix: str,
+    scope_filter: str | None = None,
+    family_id: int | None = None,
 ) -> tuple[Path | None, str]:
-    rows = db.list_transactions_for_user(telegram_user_id, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc))
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+    if scope_filter == SCOPE_FAMILY_ALL and family_id is not None:
+        rows = db.list_family_transactions(family_id, start_utc, end_utc)
+    else:
+        rows = db.list_transactions_for_user(telegram_user_id, start_utc, end_utc)
     category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
     main_currency = db.get_main_currency(telegram_user_id)
     rates = _build_rate_map(db.get_exchange_rates(telegram_user_id))
@@ -210,6 +363,13 @@ def build_category_chart(
             continue
         if row.exchange_pair_id is not None:
             continue
+        if scope_filter == SCOPE_PERSONAL and row.scope != "personal":
+            continue
+        if scope_filter == SCOPE_FAMILY_MINE and not (
+            row.scope == "family" and row.paid_by == telegram_user_id
+        ):
+            continue
+        base_minor = _to_base_minor(row, main_currency, rates)
         base_minor = _to_base_minor(row, main_currency, rates)
         if base_minor is None:
             skipped.append(f"{row.amount_minor / 100:.2f} {row.currency}")
@@ -241,6 +401,234 @@ def build_category_chart(
     if skipped:
         caption_extra = f"\n\n⚠️ Пропущено {len(skipped)} записей без курса в {main_currency} (например, {skipped[0]})."
     return path, caption + caption_extra
+
+
+_RU_MONTH_SHORT = ("", "янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+
+
+def _completed_month_ranges(app_timezone: str, months: int = DYNAMICS_MONTHS, now_local: datetime | None = None) -> list[tuple[datetime, datetime]]:
+    """Последние `months` завершённых календарных месяцев (текущий неполный исключается)."""
+    tz = ZoneInfo(app_timezone)
+    now_local = now_local or datetime.now(tz)
+    first_of_current = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    ranges = []
+    for i in range(months, 0, -1):
+        end = _add_months(first_of_current, -(i - 1))
+        start = _add_months(first_of_current, -i)
+        ranges.append((start, end))
+    return ranges
+
+
+def monthly_category_totals(
+    db,
+    telegram_user_id: int,
+    app_timezone: str,
+    months: int = DYNAMICS_MONTHS,
+    now_local: datetime | None = None,
+) -> dict:
+    """Помесячные итоги расходов по категориям в основной валюте.
+
+    Возвращает dict: months (подписи), main_currency, symbol,
+    categories {code: {title, personal: [...], family: [...]}},
+    где personal — scope='personal', family — scope='family' всей семьи.
+    Зеркальные ноги конвертаций исключаются (не расход).
+    """
+    month_ranges = _completed_month_ranges(app_timezone, months, now_local)
+    main_currency = db.get_main_currency(telegram_user_id)
+    symbol = CURRENCY_SYMBOLS.get(main_currency, main_currency)
+    rates = _build_rate_map(db.get_exchange_rates(telegram_user_id))
+    category_catalog = db.get_category_catalog(telegram_user_id, active_only=False)
+    family = db.get_family_for_user(telegram_user_id)
+    family_id = family.id if family is not None else None
+
+    categories: dict[str, dict] = {}
+    skipped = 0
+    month_labels = []
+    for start_local, end_local in month_ranges:
+        month_labels.append(f"{_RU_MONTH_SHORT[start_local.month]} {start_local.strftime('%y')}")
+        start_utc, end_utc = start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+        own_rows = db.list_transactions_for_user(telegram_user_id, start_utc, end_utc)
+        family_rows = (
+            db.list_family_transactions(family_id, start_utc, end_utc)
+            if family_id is not None
+            else []
+        )
+        seen_ids: set[int] = set()
+        for row in list(own_rows) + list(family_rows):
+            if getattr(row, "id", None) in seen_ids:
+                continue
+            seen_ids.add(row.id)
+            if row.transaction_type != "EXPENSE":
+                continue
+            if row.exchange_pair_id is not None:
+                continue
+            base_minor = _to_base_minor(row, main_currency, rates)
+            if base_minor is None:
+                skipped += 1
+                continue
+            bucket = "personal" if row.scope == "personal" else "family"
+            entry = categories.setdefault(
+                row.category,
+                {
+                    "title": category_catalog.get("EXPENSE", {}).get(row.category, row.category),
+                    "personal": [0] * len(month_ranges),
+                    "family": [0] * len(month_ranges),
+                },
+            )
+            entry[bucket][len(month_labels) - 1] += base_minor
+
+    if skipped:
+        logger.warning(
+            "Dynamics skipped %d transactions without a rate to %s (user=%s)",
+            skipped,
+            main_currency,
+            telegram_user_id,
+        )
+    return {
+        "months": month_labels,
+        "main_currency": main_currency,
+        "symbol": symbol,
+        "categories": categories,
+        "skipped": skipped,
+    }
+
+
+def detect_significant_moves(
+    monthly: dict,
+    min_pct: float = DYNAMICS_MIN_PCT,
+    min_abs_minor: int = DYNAMICS_MIN_ABS_MINOR,
+) -> list[dict]:
+    """Значимые изменения последнего месяца к предыдущему.
+
+    Категория попадает в результат, если: присутствует минимум в 2 месяцах,
+    |Δ%| >= min_pct И |Δ| >= min_abs_minor. Дополнительно определяется тренд
+    за последние 3 месяца: рост N-й месяц / снижение после роста / снижение.
+    """
+    moves = []
+    for code, data in monthly["categories"].items():
+        totals = [p + f for p, f in zip(data["personal"], data["family"])]
+        present = sum(1 for t in totals if t > 0)
+        if present < 2 or len(totals) < 2:
+            continue
+        last, prev = totals[-1], totals[-2]
+        if prev <= 0:
+            if last < min_abs_minor:
+                continue
+            moves.append(
+                {
+                    "code": code,
+                    "title": data["title"],
+                    "personal": data["personal"],
+                    "family": data["family"],
+                    "last": last,
+                    "prev": prev,
+                    "pct": None,
+                    "delta": last,
+                    "trend": "новые траты",
+                }
+            )
+            continue
+        delta = last - prev
+        pct = delta / prev * 100
+        if abs(pct) < min_pct or abs(delta) < min_abs_minor:
+            continue
+        moves.append(
+            {
+                "code": code,
+                "title": data["title"],
+                "personal": data["personal"],
+                "family": data["family"],
+                "last": last,
+                "prev": prev,
+                "pct": pct,
+                "delta": delta,
+                "trend": _trend_label(totals),
+            }
+        )
+    moves.sort(key=lambda m: abs(m["delta"]), reverse=True)
+    return moves
+
+
+def _trend_label(totals: list[int]) -> str:
+    """Направление изменения за последние до 3 месяцев."""
+    steps = [totals[i] - totals[i - 1] for i in range(max(1, len(totals) - 3), len(totals))]
+    if not steps:
+        return "без изменений"
+    if all(s > 0 for s in steps):
+        n = len(steps) + 1
+        return f"рост {n}-й месяц"
+    if steps[-1] < 0 and len(steps) >= 2 and steps[-2] > 0:
+        return "снижение после роста"
+    if all(s < 0 for s in steps):
+        return f"снижение {len(steps) + 1}-й месяц"
+    return "изменение"
+
+
+def build_dynamics_chart(
+    db,
+    telegram_user_id: int,
+    app_timezone: str,
+    output_dir: Path,
+    filename_suffix: str,
+    months: int = DYNAMICS_MONTHS,
+    now_local: datetime | None = None,
+) -> tuple[Path | None, str]:
+    """Композитная диаграмма динамики: только значимые изменения категорий.
+
+    Возвращает (path|None, caption). Пустой результат — текст без картинки.
+    """
+    monthly = monthly_category_totals(db, telegram_user_id, app_timezone, months, now_local)
+    moves = detect_significant_moves(monthly)
+    main_currency = monthly["main_currency"]
+    symbol = monthly["symbol"]
+
+    if not moves:
+        return None, (
+            "Существенных изменений трат за последние "
+            f"{months} мес. нет: все категории изменились "
+            f"менее чем на {DYNAMICS_MIN_PCT:.0f}%."
+        )
+
+    shown = moves[:DYNAMICS_MAX_CATEGORIES]
+    n = len(shown)
+    fig, axes = plt.subplots(n, 1, figsize=(10, 2.6 * n), dpi=160, squeeze=False)
+    fig.suptitle(f"Динамика трат ({', '.join(monthly['months'])})", fontsize=15, y=0.995)
+    for ax, move in zip(axes.flat, shown):
+        personal = [v / 100 for v in move["personal"]]
+        family = [v / 100 for v in move["family"]]
+        xs = range(len(monthly["months"]))
+        ax.bar(list(xs), personal, label="Личные", color="#4C78A8")
+        ax.bar(list(xs), family, bottom=personal, label="Семейные", color="#F58518")
+        ax.set_xticks(list(xs), monthly["months"], fontsize=9)
+        ax.set_ylabel(symbol, fontsize=9)
+        if move["pct"] is None:
+            note = "новые траты"
+        else:
+            sign = "+" if move["pct"] > 0 else ""
+            note = f"{sign}{move['pct']:.0f}%"
+        ax.set_title(f"{move['title']}: {note} ({move['trend']})", fontsize=11, loc="left")
+        ax.ticklabel_format(style="plain", axis="y")
+    handles, labels_ = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels_, loc="upper right", fontsize=9)
+    fig.tight_layout()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"dynamics-{telegram_user_id}-{filename_suffix}.png"
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+    lines = [f"Динамика трат ({', '.join(monthly['months'])}):"]
+    for move in shown[:8]:
+        if move["pct"] is None:
+            change = "новые траты"
+        else:
+            sign = "+" if move["pct"] > 0 else ""
+            change = f"{sign}{move['pct']:.0f}%"
+        lines.append(
+            f"• {move['title']}: {change} ({_format_money(move['last'] / 100, symbol)}; {move['trend']})"
+        )
+    if len(moves) > 8:
+        lines.append(f"…и ещё {len(moves) - 8}.")
+    return path, "\n".join(lines)
 
 
 def previous_month_period(app_timezone: str, now_local: datetime | None = None) -> tuple[datetime, datetime, str]:

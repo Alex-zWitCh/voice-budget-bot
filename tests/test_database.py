@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
 from openpyxl import load_workbook
 from sqlalchemy import text
 
@@ -13,11 +14,20 @@ from schemas import ParsedExchange, ParsedScheduledEvent, ParsedTransaction
 from decimal import Decimal
 from services.reports import (
     build_category_chart,
+    build_dynamics_chart,
     build_last_30_days_expense_chart,
+    build_last_30_days_family_mine_expense_chart,
+    build_last_30_days_family_total_expense_chart,
     build_last_30_days_income_chart,
+    build_last_30_days_personal_expense_chart,
     build_previous_month_expense_chart,
     build_previous_month_income_chart,
+    build_previous_month_family_mine_expense_chart,
+    build_previous_month_family_total_expense_chart,
+    build_previous_month_personal_expense_chart,
+    detect_significant_moves,
     export_transactions_xlsx,
+    monthly_category_totals,
     _format_percent,
 )
 from services.scheduler import ScheduledEventRunner, calendar_text
@@ -751,3 +761,121 @@ def test_exchange_is_excluded_from_category_chart(tmp_path):
     assert path is None
     assert "Расходов не найдено" in caption
     assert "Переводы" not in caption
+
+
+def _add_scoped_tx(db, config, user_id, chat_id, message_id, when_utc, amount_minor, category="PRODUCTS", scope="personal", family_id=None, paid_by=None):
+    return db.create_transaction(
+        telegram_chat_id=chat_id,
+        telegram_message_id=message_id,
+        telegram_user_id=user_id,
+        parsed=ParsedTransaction("EXPENSE", amount_minor, "RUB", category, "desc", 0.95),
+        transcript="t",
+        message_date_utc=when_utc,
+        voice_duration_sec=0,
+        config=config,
+        scope=scope,
+        family_id=family_id,
+        paid_by=paid_by if paid_by is not None else user_id,
+    )
+
+
+def _dynamics_config():
+    return SimpleNamespace(stt_model="w", deepseek_model="d", processing_version="1.0")
+
+
+def test_personal_pie_excludes_family_rows(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = _dynamics_config()
+    recent = datetime.now(timezone.utc) - timedelta(days=3)
+    family_id = db.create_family("Fam", 20)
+    assert family_id is not None
+    _add_scoped_tx(db, config, 20, 1, 101, recent, 50000, "PRODUCTS", scope="personal")
+    _add_scoped_tx(db, config, 20, 1, 102, recent, 90000, "CAFE", scope="family", family_id=family_id)
+
+    path, caption = build_last_30_days_personal_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+    assert path is not None and path.exists()
+    assert "личные" in caption
+
+    path, _caption = build_last_30_days_family_mine_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+    assert path is not None and path.exists()
+
+
+def test_family_total_includes_other_members_rows(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    config = _dynamics_config()
+    recent = datetime.now(timezone.utc) - timedelta(days=3)
+    family_id = db.create_family("Fam", 20)
+    code = db.generate_invite_code(20)
+    ok, _name = db.join_family_by_code(30, code)
+    assert ok is True
+    # семейная трата, оплаченная другим участником
+    _add_scoped_tx(db, config, 30, 1, 201, recent, 70000, "CAFE", scope="family", family_id=family_id, paid_by=30)
+
+    path, caption = build_last_30_days_family_total_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+    assert path is not None and path.exists()
+    assert "семейные" in caption.lower()
+
+    # у самого пользователя семейных трат нет -> только текст
+    path, caption = build_last_30_days_family_mine_expense_chart(db, 20, "Europe/Moscow", tmp_path)
+    assert path is None
+    assert "не найдено" in caption
+
+
+def _add_month_tx(db, config, user_id, message_id, year, month, amount_minor, category="PRODUCTS", scope="personal"):
+    return _add_scoped_tx(
+        db, config, user_id, 1, message_id,
+        datetime(year, month, 15, 12, tzinfo=timezone.utc),
+        amount_minor, category, scope=scope,
+    )
+
+
+def test_dynamics_detects_growth_then_drop(tmp_path):
+    from services.reports import detect_significant_moves, monthly_category_totals
+
+    db = Database(tmp_path / "test.sqlite3")
+    config = _dynamics_config()
+    # PRODUCTS: рост 3 месяца подряд, затем снижение
+    _add_month_tx(db, config, 20, 301, 2026, 7, 1000000)
+    _add_month_tx(db, config, 20, 302, 2026, 8, 1300000)
+    _add_month_tx(db, config, 20, 303, 2026, 9, 1700000)
+    _add_month_tx(db, config, 20, 304, 2026, 10, 1200000)
+    # CAFE: стабильно, без изменений -> не должен попасть в динамику
+    _add_month_tx(db, config, 20, 311, 2026, 7, 5000, category="CAFE")
+    _add_month_tx(db, config, 20, 312, 2026, 8, 5000, category="CAFE")
+    _add_month_tx(db, config, 20, 313, 2026, 9, 5000, category="CAFE")
+    _add_month_tx(db, config, 20, 314, 2026, 10, 5000, category="CAFE")
+
+    now_local = datetime(2026, 11, 15, 12, tzinfo=ZoneInfo("Europe/Moscow"))
+    monthly = monthly_category_totals(db, 20, "Europe/Moscow", now_local=now_local)
+    assert [m for m in monthly["months"]] == ["июл 26", "авг 26", "сен 26", "окт 26"]
+    moves = detect_significant_moves(monthly)
+    codes = [m["code"] for m in moves]
+    assert "PRODUCTS" in codes
+    assert "CAFE" not in codes
+    products = next(m for m in moves if m["code"] == "PRODUCTS")
+    assert products["trend"] == "снижение после роста"
+    assert products["pct"] == pytest.approx(-29.41, abs=0.01)
+
+
+def test_dynamics_empty_without_significant_changes(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    path, caption = build_dynamics_chart(db, 20, "Europe/Moscow", tmp_path, "test-empty")
+    assert path is None
+    assert "Существенных изменений" in caption
+
+
+def test_dynamics_chart_created_for_significant_moves(tmp_path):
+    from services.reports import build_dynamics_chart
+
+    db = Database(tmp_path / "test.sqlite3")
+    config = _dynamics_config()
+    _add_month_tx(db, config, 20, 401, 2026, 7, 1000000)
+    _add_month_tx(db, config, 20, 402, 2026, 8, 1300000)
+    _add_month_tx(db, config, 20, 403, 2026, 9, 1700000)
+    _add_month_tx(db, config, 20, 404, 2026, 10, 1200000)
+
+    now_local = datetime(2026, 11, 15, 12, tzinfo=ZoneInfo("Europe/Moscow"))
+    path, caption = build_dynamics_chart(db, 20, "Europe/Moscow", tmp_path, "test-dyn", now_local=now_local)
+    assert path is not None
+    assert path.exists()
+    assert "Динамика трат" in caption

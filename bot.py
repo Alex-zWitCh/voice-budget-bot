@@ -4,8 +4,10 @@ import signal
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from time import monotonic
+from zoneinfo import ZoneInfo
 
 import telebot
 from telebot import apihelper, types
@@ -24,7 +26,14 @@ from services.ask_renderer import AskRenderer
 from services.ask_service import AskService
 from services.deepseek_transaction_parser import DeepSeekTransactionParser
 from services.stt_transcriber import FallbackTranscriber, SttTranscriber
-from services.reports import build_last_30_days_expense_chart, build_last_30_days_income_chart
+from services.reports import (
+    build_dynamics_chart,
+    build_last_30_days_expense_chart,
+    build_last_30_days_family_mine_expense_chart,
+    build_last_30_days_family_total_expense_chart,
+    build_last_30_days_income_chart,
+    build_last_30_days_personal_expense_chart,
+)
 from services.access import is_allowed_call as _is_allowed_call
 from services.access import is_allowed_message as _is_allowed_message
 from services.scheduler import ScheduledEventRunner, calendar_text
@@ -547,14 +556,35 @@ def _handle_currency_command(bot, db: Database, message) -> None:
 def _send_last_30_days_report(bot, db: Database, config: Config, chat_id: int, telegram_user_id: int) -> None:
     paths = []
     try:
-        for builder in (build_last_30_days_expense_chart, build_last_30_days_income_chart):
-            path, caption = builder(db, telegram_user_id, config.app_timezone, config.temp_audio_dir / "reports")
+        reports_dir = config.temp_audio_dir / "reports"
+        end_local = datetime.now(ZoneInfo(config.app_timezone))
+        dynamics_suffix = f"last-30-days-{end_local:%Y-%m-%d}"
+        builders = [build_last_30_days_income_chart]
+        if db.get_family_for_user(telegram_user_id) is None:
+            builders.insert(0, build_last_30_days_expense_chart)
+        else:
+            builders[0:0] = [
+                build_last_30_days_personal_expense_chart,
+                build_last_30_days_family_mine_expense_chart,
+                build_last_30_days_family_total_expense_chart,
+            ]
+        for builder in builders:
+            path, caption = builder(db, telegram_user_id, config.app_timezone, reports_dir)
             if not path:
                 bot.send_message(chat_id, caption)
                 continue
             paths.append(path)
             with open(path, "rb") as image:
                 bot.send_photo(chat_id, image, caption=caption)
+        dyn_path, dyn_caption = build_dynamics_chart(
+            db, telegram_user_id, config.app_timezone, reports_dir, dynamics_suffix
+        )
+        if not dyn_path:
+            bot.send_message(chat_id, dyn_caption)
+        else:
+            paths.append(dyn_path)
+            with open(dyn_path, "rb") as image:
+                bot.send_photo(chat_id, image, caption=dyn_caption)
     except Exception:
         logging.getLogger(__name__).exception("Could not build last 30 days report user_id=%s", telegram_user_id)
         bot.send_message(chat_id, "⚠️ Не удалось подготовить графический отчет.")

@@ -9,8 +9,12 @@ from categories import CURRENCY_SYMBOLS
 from database import add_recurrence
 from schemas import ParsedTransaction
 from services.reports import (
+    build_dynamics_chart,
     build_previous_month_expense_chart,
+    build_previous_month_family_mine_expense_chart,
+    build_previous_month_family_total_expense_chart,
     build_previous_month_income_chart,
+    build_previous_month_personal_expense_chart,
     export_transactions_xlsx,
     previous_month_period,
 )
@@ -110,7 +114,14 @@ class ScheduledEventRunner:
             paths = []
             try:
                 report_dir = self.config.temp_audio_dir / "reports"
-                for builder in (build_previous_month_expense_chart, build_previous_month_income_chart):
+                expense_builders = [build_previous_month_expense_chart]
+                if self.db.get_family_for_user(user_id) is not None:
+                    expense_builders = [
+                        build_previous_month_personal_expense_chart,
+                        build_previous_month_family_mine_expense_chart,
+                        build_previous_month_family_total_expense_chart,
+                    ]
+                for builder in (*expense_builders, build_previous_month_income_chart):
                     chart_path, caption = builder(self.db, user_id, self.config.app_timezone, report_dir)
                     if chart_path:
                         paths.append(chart_path)
@@ -118,6 +129,16 @@ class ScheduledEventRunner:
                             self.bot.send_photo(chat_id, image, caption=f"Автоматический отчет за прошлый месяц\n\n{caption}")
                     else:
                         self.bot.send_message(chat_id, f"Автоматический отчет за прошлый месяц\n\n{caption}")
+
+                dyn_path, dyn_caption = build_dynamics_chart(
+                    self.db, user_id, self.config.app_timezone, report_dir, f"monthly-{period_key}"
+                )
+                if dyn_path:
+                    paths.append(dyn_path)
+                    with open(dyn_path, "rb") as image:
+                        self.bot.send_photo(chat_id, image, caption=f"Автоматический отчет за прошлый месяц\n\n{dyn_caption}")
+                else:
+                    self.bot.send_message(chat_id, f"Автоматический отчет за прошлый месяц\n\n{dyn_caption}")
 
                 xlsx_path = export_transactions_xlsx(
                     self.db,
